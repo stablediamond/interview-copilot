@@ -1,0 +1,24 @@
+node_modules
+.next
+out
+build
+dist
+
+# env
+
+# prisma / sqlite
+prisma/dev.db
+prisma/dev.db-journal
+*.db
+*.db-journal
+
+# electron build output
+release
+
+# misc
+.DS_Store
+*.log
+.vercel
+next-env.d.ts
+tsconfig.tsbuildinfo
+config.bat

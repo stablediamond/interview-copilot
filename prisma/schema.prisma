@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model AppConfig {
+  id                 String   @id @default("singleton")
+  openaiApiKey       String?
+  strongModel        String?
+  fastModel          String?
+  transcriptionModel String?
+  reasoningEffort    String?
+  updatedAt          DateTime @updatedAt
+}
+
+model CandidateProfile {
+  id                    String             @id @default(cuid())
+  name                  String
+  targetTitle          String
+  rawResumeText         String
+  structuredProfileJson String
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  sessions              InterviewSession[]
+}
+
+model JobProfile {
+  id                  String             @id @default(cuid())
+  company             String
+  roleTitle           String
+  rawJobDescription   String
+  structuredJobJson   String
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+  sessions            InterviewSession[]
+}
+
+model PositioningBrief {
+  id                 String   @id @default(cuid())
+  candidateProfileId String
+  jobProfileId       String
+  briefJson          String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([candidateProfileId, jobProfileId])
+}
+
+model Story {
+  id               String   @id @default(cuid())
+  title            String
+  category         String
+  shortVersion     String
+  starVersion      String
+  technicalVersion String
+  keywordsJson     String
+  evidenceJson     String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model InterviewSession {
+  id                 String            @id @default(cuid())
+  title              String
+  candidateProfileId String?
+  jobProfileId       String?
+  transcript         String            @default("")
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  candidateProfile   CandidateProfile? @relation(fields: [candidateProfileId], references: [id], onDelete: SetNull)
+  jobProfile         JobProfile?       @relation(fields: [jobProfileId], references: [id], onDelete: SetNull)
+  turns              InterviewTurn[]
+}
+
+model InterviewTurn {
+  id              String           @id @default(cuid())
+  sessionId       String
+  rawTranscript   String
+  detectedQuestion String
+  questionType    String
+  generatedAnswer String
+  answerMode      String
+  interviewStage  String           @default("general")
+  keywordsJson    String
+  confidence      String
+  riskNote        String
+  possibleFollowUp String
+  createdAt       DateTime         @default(now())
+  session         InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}

@@ -1,0 +1,121 @@
+{
+  "name": "interview-coach",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Local-first real-time interview assistant for personal interview preparation and permitted live coaching.",
+  "author": "Interview Coach",
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "postinstall": "prisma generate",
+    "seed": "tsx prisma/seed.ts",
+    "electron": "electron electron/main.cjs --no-sandbox",
+    "electron:dev": "concurrently -k -n next,electron \"next dev\" \"cross-env ELECTRON_DEV=1 wait-on http://localhost:3000/session && cross-env ELECTRON_DEV=1 electron electron/main.cjs --no-sandbox\"",
+    "electron:start": "npm run build && cross-env NODE_ENV=production electron electron/main.cjs --no-sandbox",
+    "prepare:desktop": "node scripts/prepare-desktop.mjs",
+    "dist:win": "npm run build && npm run prepare:desktop && electron-builder --win --publish never",
+    "release:win": "npm run build && npm run prepare:desktop && electron-builder --win --publish always"
+  },
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.interviewcoach.app",
+    "productName": "Interview Coach",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "electron/livecaptions.ps1"
+    ],
+    "extraResources": [
+      {
+        "from": ".next/standalone",
+        "to": "server"
+      },
+      {
+        "from": ".next/standalone/node_modules",
+        "to": "server/node_modules"
+      },
+      {
+        "from": "prisma/seed.db",
+        "to": "seed.db"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "pinyin-pro": "^3.28.1"
+  },
+  "devDependencies": {
+    "@hookform/resolvers": "^3.9.1",
+    "@prisma/client": "^6.1.0",
+    "@radix-ui/react-dialog": "^1.1.4",
+    "@radix-ui/react-dropdown-menu": "^2.1.4",
+    "@radix-ui/react-label": "^2.1.1",
+    "@radix-ui/react-select": "^2.1.4",
+    "@radix-ui/react-slot": "^1.1.1",
+    "@radix-ui/react-switch": "^1.1.2",
+    "@radix-ui/react-tabs": "^1.1.2",
+    "@types/node": "^22.10.2",
+    "@types/pdf-parse": "^1.1.4",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "autoprefixer": "^10.4.20",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "concurrently": "^10.0.3",
+    "cross-env": "^10.1.0",
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.0",
+    "eslint": "^9.17.0",
+    "eslint-config-next": "15.1.3",
+    "lucide-react": "^0.469.0",
+    "next": "15.1.3",
+    "next-themes": "^0.4.4",
+    "openai": "^4.77.0",
+    "pdf-parse": "^1.1.1",
+    "postcss": "^8.4.49",
+    "prisma": "^6.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-hook-form": "^7.54.2",
+    "sonner": "^1.7.1",
+    "tailwind-merge": "^2.6.0",
+    "tailwindcss": "^3.4.17",
+    "tailwindcss-animate": "^1.0.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "wait-on": "^9.0.10",
+    "zod": "^3.24.1",
+    "zustand": "^5.0.2"
+  }
+}
