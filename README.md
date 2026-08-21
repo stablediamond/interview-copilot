@@ -56,6 +56,8 @@ You can configure the OpenAI key and models **either** in the Settings UI **or**
 | `OPENAI_FAST_MODEL` | No | `gpt-4.1-mini` | Fast model for question detection |
 | `DEEPGRAM_API_KEY` | No | — | Optional low-latency mic streaming. If missing, OpenAI transcribes audio instead |
 | `DATABASE_URL` | No | `file:./dev.db` | SQLite database location |
+| `JOB_TRACK_URL` | No | Job Track production URL | Origin used to verify email/password logins. Empty string disables the gate |
+| `NEXT_PUBLIC_JOB_TRACK_URL` | No | same | Public Job Track URL for the sign-up link |
 
 The app never sends your API keys to the browser. The OpenAI key is stored server-side and only ever shown masked. For Deepgram, the server mints a short-lived JWT via `/v1/auth/grant`, and only that temporary token reaches the client.
 
@@ -173,8 +175,8 @@ private repos.)
   (`%APPDATA%/interview-coach`) on first launch, so data persists and is
   writable.
 - Each install is fully independent: its own database, settings, and API key
-  (entered in-app on first run). There's no shared server or accounts — for
-  centrally-managed users/roles you'd deploy the web app instead.
+  (entered in-app on first run). Sign-in uses your **Job Track** email and
+  password; resume data stays on this machine.
 
 ## Keyboard shortcuts (Session page)
 
@@ -202,31 +204,23 @@ private repos.)
 - A **confidence** label reflects evidence strength, and a **risk note** warns when an answer leans on weak support.
 - The **Safer** mode rewrites an answer to remove unsupported claims.
 
-## Access gate (Supabase Auth login)
+## Access gate (Job Track login)
 
-You can ship a build that only works for accounts you've created, using
-**Supabase Authentication**. No tables and no SQL are required — access is the
-built-in `auth.users` list, managed from the dashboard. Only **public** values
-are embedded in the app (project URL + anon key); the `service_role` key is
-never used.
+The app uses the same email/password accounts as **Job Track**. Pending and
+suspended users are rejected with the same messages as the Job Track website.
+There is no separate Interview Coach password.
 
-1. In `src/lib/supabase.ts`, paste your `SUPABASE_URL` and `SUPABASE_ANON_KEY`
-   (anon/public key only). While these are blank the gate is **off** and the app
-   works normally.
-2. In the Supabase dashboard:
-   - **Authentication → Providers → Email**: enable it.
-   - **Authentication → Providers** (or Settings): turn **off** "Allow new users
-     to sign up" so only you can add accounts.
-   - **Authentication → Users → Add user**: create an account (email + password)
-     for each person who should have access.
-3. Control access from **Authentication → Users**:
-   - Grant access: add a user.
-   - Revoke access: delete or ban the user. They lose access within the access
-     token's lifetime (≈1 hour) — refresh and new logins are rejected
-     immediately. To cut everyone off at once, rotate the anon key.
+1. Create or approve the user in Job Track (sign up, or **Admin → Users**).
+2. In Interview Coach, sign in with that email and password.
+3. Revoke access from Job Track (suspend the user, change their password, or
+   delete their session). The overlay drops them on the next verification.
 
-On launch the app shows a sign-in screen. The OpenAI/Deepgram-backed API routes
-also verify the user's token server-side (return 401 when missing/revoked), with
+By default the app talks to `https://job-track.usgm.workers.dev`. Override with
+`JOB_TRACK_URL` (and `NEXT_PUBLIC_JOB_TRACK_URL` for the signup link). Set
+`JOB_TRACK_URL` to an empty string to turn the gate **off** for local-only use.
+
+On launch the app shows a sign-in screen. OpenAI/Deepgram-backed API routes
+verify the Job Track token server-side (return 401 when missing/revoked), with
 a short cache so a brief network blip won't kick out a signed-in user
 mid-session.
 

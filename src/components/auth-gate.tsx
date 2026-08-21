@@ -14,36 +14,57 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
-import { isSupabaseConfigured } from "@/lib/supabase";
+import { apiFetch } from "@/lib/client";
+import { getJobTrackUrl, isJobTrackConfigured } from "@/lib/job-track";
 import {
   getStoredEmail,
   getValidAccessToken,
   signIn,
   signOut,
-} from "@/lib/supabase-auth";
+} from "@/lib/job-track-auth";
 
 type Status = "loading" | "in" | "out";
 
 /**
- * Login gate backed by Supabase Auth. When Supabase isn't configured this is a
+ * Login gate backed by Job Track. When Job Track isn't configured this is a
  * pass-through. Otherwise the whole app is hidden behind a sign-in screen, and
  * the protected API routes independently verify the token.
  */
 export function AuthGate({ children }: { children: React.ReactNode }) {
-  const configured = isSupabaseConfigured();
-  const [status, setStatus] = React.useState<Status>(
-    configured ? "loading" : "in"
-  );
+  const [status, setStatus] = React.useState<Status>("loading");
   const [email, setEmail] = React.useState("");
+  const [configured, setConfigured] = React.useState(false);
 
   React.useEffect(() => {
-    if (!configured) return;
+    const gateOn = isJobTrackConfigured();
+    setConfigured(gateOn);
+    if (!gateOn) {
+      setStatus("in");
+      return;
+    }
     void (async () => {
       const token = await getValidAccessToken();
-      if (token) setEmail(getStoredEmail() ?? "");
-      setStatus(token ? "in" : "out");
+      if (!token) {
+        setStatus("out");
+        return;
+      }
+      setEmail(getStoredEmail() ?? "");
+      setStatus("in");
+      try {
+        await apiFetch("/api/auth/session");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "";
+        const revoked =
+          /invalid|revoked|pending|suspended|sign in/i.test(message) &&
+          !/could not reach/i.test(message);
+        if (revoked) {
+          await signOut();
+          setEmail("");
+          setStatus("out");
+        }
+      }
     })();
-  }, [configured]);
+  }, []);
 
   if (status === "loading") {
     return (
@@ -91,10 +112,10 @@ function LoginScreen({ onSignedIn }: { onSignedIn: (email: string) => void }) {
     setBusy(true);
     try {
       await signIn(email.trim(), password);
-      onSignedIn(email.trim());
+      onSignedIn(email.trim().toLowerCase());
     } catch (err) {
       toast.error("Sign in failed", {
-        description: err instanceof Error ? err.message : "Check your credentials.",
+        description: err instanceof Error ? err.message : "Check your Job Track credentials.",
       });
     } finally {
       setBusy(false);
@@ -107,7 +128,7 @@ function LoginScreen({ onSignedIn }: { onSignedIn: (email: string) => void }) {
         <CardHeader>
           <CardTitle>Sign in</CardTitle>
           <CardDescription>
-            Use the account you were given to access Interview Coach.
+            Use your Job Track email and password.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -116,11 +137,12 @@ function LoginScreen({ onSignedIn }: { onSignedIn: (email: string) => void }) {
               <Label htmlFor="auth-email">Email</Label>
               <Input
                 id="auth-email"
+                name="email"
                 type="email"
-                autoComplete="username"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+                placeholder="you@company.com"
                 required
               />
             </div>
@@ -128,6 +150,7 @@ function LoginScreen({ onSignedIn }: { onSignedIn: (email: string) => void }) {
               <Label htmlFor="auth-password">Password</Label>
               <Input
                 id="auth-password"
+                name="password"
                 type="password"
                 autoComplete="current-password"
                 value={password}
@@ -136,8 +159,20 @@ function LoginScreen({ onSignedIn }: { onSignedIn: (email: string) => void }) {
               />
             </div>
             <Button type="submit" className="w-full" disabled={busy}>
-              {busy ? <Spinner /> : <LogIn className="h-4 w-4" />} Sign in
+              {busy ? <Spinner /> : <LogIn className="h-4 w-4" />}{" "}
+              {busy ? "Signing in…" : "Sign in"}
             </Button>
+            <p className="text-center text-xs text-muted-foreground">
+              No account?{" "}
+              <a
+                href={`${getJobTrackUrl()}/signup`}
+                target="_blank"
+                rel="noreferrer"
+                className="font-medium text-primary underline-offset-4 hover:underline"
+              >
+                Sign up on Job Track
+              </a>
+            </p>
           </form>
         </CardContent>
       </Card>

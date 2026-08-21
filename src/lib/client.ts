@@ -1,4 +1,4 @@
-import { getValidAccessToken } from "./supabase-auth";
+import { getValidAccessToken } from "./job-track-auth";
 
 export interface ApiSuccess<T> {
   ok: true;

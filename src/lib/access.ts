@@ -1,24 +1,16 @@
 /**
- * Server-side access gate backed by Supabase Auth.
+ * Server-side access gate backed by Job Track Auth.
  *
  * Protected API routes call `assertAccess(request)`, which checks the caller's
- * bearer token (issued by Supabase when the user signed in) against Supabase's
- * /auth/v1/user endpoint. Only users that exist in your project's Authentication
- * → Users can use the app; delete or ban a user to revoke them.
+ * bearer token (issued after a Job Track email/password login) against
+ * Job Track's /api/auth/me endpoint. Pending, suspended, and revoked accounts
+ * are rejected the same way as the Job Track web app.
  *
- * When Supabase isn't configured (blank URL/key in src/lib/supabase.ts), the
- * gate is OFF and every request is allowed, so local dev isn't blocked.
- *
- * Only public values are used here (anon key). The service_role key is never
- * referenced.
+ * When JOB_TRACK_URL is set to an empty string, the gate is OFF and every
+ * request is allowed.
  */
-import {
-  SUPABASE_ANON_KEY,
-  authBaseUrl,
-  isSupabaseConfigured,
-} from "./supabase";
+import { getJobTrackUrl, isJobTrackConfigured } from "./job-track";
 
-// Cache token verifications briefly to avoid a Supabase round-trip per request.
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 const verifyCache = new Map<string, { ok: boolean; at: number }>();
@@ -39,15 +31,16 @@ function extractToken(request?: Request): string | null {
   return match ? match[1].trim() : null;
 }
 
-async function verifyToken(token: string): Promise<boolean> {
+async function verifyToken(token: string): Promise<{ ok: boolean; message?: string; status?: number }> {
   const now = Date.now();
   const cached = verifyCache.get(token);
-  if (cached && now - cached.at < CACHE_TTL_MS) return cached.ok;
+  if (cached && now - cached.at < CACHE_TTL_MS) {
+    return { ok: cached.ok };
+  }
 
   try {
-    const res = await fetch(`${authBaseUrl()}/user`, {
+    const res = await fetch(`${getJobTrackUrl()}/api/auth/me`, {
       headers: {
-        apikey: SUPABASE_ANON_KEY,
         Authorization: `Bearer ${token}`,
         Accept: "application/json",
       },
@@ -55,29 +48,41 @@ async function verifyToken(token: string): Promise<boolean> {
     });
     const ok = res.ok;
     verifyCache.set(token, { ok, at: now });
-    return ok;
+    if (ok) return { ok: true };
+
+    let message = "Your session is invalid or has been revoked.";
+    try {
+      const body = (await res.json()) as { message?: string };
+      if (body.message) message = body.message;
+    } catch {
+      // keep default
+    }
+    return { ok: false, message, status: res.status === 403 ? 403 : 401 };
   } catch {
     // Network failure: trust a recent successful verification if we have one, so
     // a brief outage doesn't kick out a signed-in user mid-interview.
-    if (cached?.ok) return true;
-    return false;
+    if (cached?.ok) return { ok: true };
+    return { ok: false, message: "Could not reach Job Track to verify your session." };
   }
 }
 
 /**
- * Throw AccessError if the request isn't from a valid signed-in Supabase user.
- * No-op when Supabase auth isn't configured.
+ * Throw AccessError if the request isn't from a valid signed-in Job Track user.
+ * No-op when Job Track auth isn't configured.
  */
 export async function assertAccess(request?: Request): Promise<void> {
-  if (!isSupabaseConfigured()) return;
+  if (!isJobTrackConfigured()) return;
 
   const token = extractToken(request);
   if (!token) {
     throw new AccessError("Please sign in to use this app.", 401);
   }
 
-  const ok = await verifyToken(token);
-  if (!ok) {
-    throw new AccessError("Your session is invalid or has been revoked.", 401);
+  const result = await verifyToken(token);
+  if (!result.ok) {
+    throw new AccessError(
+      result.message || "Your session is invalid or has been revoked.",
+      result.status ?? 401,
+    );
   }
 }
