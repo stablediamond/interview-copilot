@@ -9,6 +9,18 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+type JobTrackLoginBody = {
+  ok?: boolean;
+  token?: string;
+  expiresIn?: number;
+  email?: string;
+  firstname?: string;
+  lastname?: string;
+  privilege?: string;
+  message?: string;
+  error?: string;
+};
+
 /**
  * Proxy Job Track's JSON login so the desktop overlay never talks to Job Track
  * from the renderer (no CORS, same error messages as the web app).
@@ -35,21 +47,11 @@ export async function POST(request: Request) {
       cache: "no-store",
     });
 
-    let body: {
-      ok?: boolean;
-      token?: string;
-      expiresIn?: number;
-      email?: string;
-      firstname?: string;
-      lastname?: string;
-      privilege?: string;
-      message?: string;
-      error?: string;
-    } | null = null;
+    let parsed: JobTrackLoginBody | null = null;
     try {
-      body = (await res.json()) as typeof body;
+      parsed = (await res.json()) as JobTrackLoginBody;
     } catch {
-      body = null;
+      parsed = null;
     }
 
     if (res.status === 404) {
@@ -59,20 +61,21 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!res.ok || !body?.ok || !body.token) {
+    const token = parsed?.token;
+    if (!res.ok || !parsed?.ok || !token) {
       return jsonError(
-        body?.message || body?.error || "Invalid email or password.",
+        parsed?.message || parsed?.error || "Invalid email or password.",
         res.status === 403 ? 403 : res.status === 401 ? 401 : 502,
       );
     }
 
     return jsonOk({
-      token: body.token,
-      email: body.email || data.email.trim().toLowerCase(),
-      expiresIn: body.expiresIn ?? 60 * 60 * 24 * 7,
-      firstname: body.firstname ?? "",
-      lastname: body.lastname ?? "",
-      privilege: body.privilege ?? "",
+      token,
+      email: parsed.email || data.email.trim().toLowerCase(),
+      expiresIn: parsed.expiresIn ?? 60 * 60 * 24 * 7,
+      firstname: parsed.firstname ?? "",
+      lastname: parsed.lastname ?? "",
+      privilege: parsed.privilege ?? "",
     });
   } catch (err) {
     if (err instanceof TypeError) {
