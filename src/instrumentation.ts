@@ -5,6 +5,11 @@
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
-  const { applyPendingMigrations } = await import("./lib/migrate-runtime");
+  if (!process.env.DATABASE_URL?.trim()) {
+    process.env.DATABASE_URL = "file:./dev.db";
+  }
+  // Separate file so Edge compilation of instrumentation.ts does not follow
+  // Node-only fs/Prisma imports (webpack IgnorePlugin also drops this on Edge).
+  const { applyPendingMigrations } = await import("./instrumentation.node");
   await applyPendingMigrations();
 }
