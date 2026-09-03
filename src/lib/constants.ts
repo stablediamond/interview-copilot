@@ -73,9 +73,12 @@ export const CONFIDENCE_LABELS: Record<Confidence, string> = {
   low: "Low confidence",
 };
 
+export const CHATGPT_URL = "https://chatgpt.com";
+
 export const NAV_ITEMS = [
   { href: "/setup", label: "Setup" },
   { href: "/session", label: "Session" },
+  { href: "/chatgpt", label: "ChatGPT" },
   { href: "/stories", label: "Stories" },
   { href: "/history", label: "History" },
   { href: "/settings", label: "Settings" },

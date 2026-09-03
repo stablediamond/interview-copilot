@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, BookText, History, Mic, Settings, Sparkles } from "lucide-react";
+import { ArrowRight, BookText, History, MessageSquare, Mic, Settings, Sparkles } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -15,6 +15,12 @@ const cards = [
     title: "Session",
     description: "Run a live session with audio or pasted captions and generate spoken answers.",
     icon: Mic,
+  },
+  {
+    href: "/chatgpt",
+    title: "ChatGPT",
+    description: "Open chatgpt.com in an embedded webview. Your ChatGPT login is saved on this device.",
+    icon: MessageSquare,
   },
   {
     href: "/stories",

@@ -5,10 +5,13 @@
 const {
   app,
   BrowserWindow,
+  WebContentsView,
   globalShortcut,
   ipcMain,
   session,
   desktopCapturer,
+  shell,
+  screen,
 } = require("electron");
 const path = require("path");
 const net = require("net");
@@ -29,6 +32,25 @@ try {
 // user-facing product name is still "Interview Coach" (build.productName).
 // Must run before the app is ready.
 app.setName("InterviewCoach");
+
+// Must run before app.ready. Chromium 152+ (Electron 44) blocks third-party
+// cookies and advertises an Electron brand in Client Hints — both break
+// ChatGPT → Microsoft (Outlook) SSO and land on /auth/error?error=undefined.
+app.commandLine.appendSwitch(
+  "disable-features",
+  "TrackingProtection3pcd,ThirdPartyStoragePartitioning,IpPrivacyV2,PasswordManager,AutofillServerCommunication"
+);
+app.commandLine.appendSwitch("disable-blink-features", "AutomationControlled");
+app.userAgentFallback = (() => {
+  const chrome = process.versions.chrome;
+  if (process.platform === "win32") {
+    return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
+  }
+  if (process.platform === "darwin") {
+    return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
+  }
+  return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
+})();
 
 const isDev = process.env.ELECTRON_DEV === "1";
 const PORT = Number(process.env.PORT || 3000);
@@ -243,6 +265,17 @@ function createWindow() {
 
   tryLoad();
   mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.on("resize", () => applyChatgptBounds());
+  mainWindow.on("close", () => {
+    if (chatgptVisible && mainWindow) {
+      writeChatgptState({ bounds: mainWindow.getBounds() });
+    }
+  });
+  mainWindow.on("closed", () => {
+    chatgptView = null;
+    mainWindow = null;
+    chatgptVisible = false;
+  });
   // Safety net: reveal the window even if "ready-to-show" never fires.
   setTimeout(() => {
     if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
@@ -410,8 +443,476 @@ ipcMain.on("livecaptions:start", (event) => {
 
 ipcMain.on("livecaptions:stop", () => stopCaptions());
 
+/* --------------------- ChatGPT embed (persist login + chat) --------------------- */
+// A WebContentsView (not the deprecated <webview> tag) sits over the ChatGPT
+// page. The persist:chatgpt partition keeps cookies/localStorage across
+// restarts. The view itself is kept alive when you leave the page so the
+// current conversation is still there when you come back.
+const CHATGPT_HOME = "https://chatgpt.com";
+const CHATGPT_PARTITION = "persist:chatgpt";
+const CHATGPT_HOSTS = new Set([
+  "chatgpt.com",
+  "chat.openai.com",
+  "auth.openai.com",
+  "openai.com",
+]);
+/** @type {import("electron").WebContentsView | null} */
+let chatgptView = null;
+let chatgptVisible = false;
+/** @type {Electron.Rectangle | null} */
+let overlayBoundsBeforeChatgpt = null;
+/** @type {{ x: number, y: number, width: number, height: number } | null} */
+let lastChatgptGuestBounds = null;
+/** @type {ReturnType<typeof setTimeout> | null} */
+let chatgptLeaveTimer = null;
+
+function chromeUserAgent() {
+  const chrome = process.versions.chrome;
+  if (process.platform === "win32") {
+    return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
+  }
+  if (process.platform === "darwin") {
+    return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
+  }
+  return `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`;
+}
+
+function hostOf(raw) {
+  try {
+    return new URL(raw).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function isChatgptUrl(raw) {
+  const host = hostOf(raw);
+  if (!host) return false;
+  if (CHATGPT_HOSTS.has(host)) return true;
+  return host.endsWith(".chatgpt.com") || host.endsWith(".openai.com");
+}
+
+/** Don't restore / persist login pages — they replay the last email and auth errors. */
+function shouldRememberChatgptUrl(raw) {
+  if (!isChatgptUrl(raw)) return false;
+  try {
+    const pathName = new URL(raw).pathname.toLowerCase();
+    if (
+      pathName.startsWith("/auth") ||
+      pathName.includes("login") ||
+      pathName.includes("signin") ||
+      pathName.includes("oauth")
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Drop Chromium's saved usernames for this partition (not ChatGPT cookies). */
+function clearChatgptBrowserAutofill() {
+  const dir = path.join(app.getPath("userData"), "Partitions", "chatgpt");
+  for (const name of [
+    "Login Data",
+    "Login Data-journal",
+    "Login Data For Account",
+    "Login Data For Account-journal",
+    "Web Data",
+    "Web Data-journal",
+  ]) {
+    try {
+      fs.unlinkSync(path.join(dir, name));
+    } catch {
+      // File may not exist yet, or Chromium already has it open.
+    }
+  }
+}
+
+function hostEndsWith(host, suffix) {
+  return host === suffix || host.endsWith(`.${suffix}`);
+}
+
+/** Microsoft / Google / Apple identity pages used by ChatGPT sign-in. */
+function isExternalIdpUrl(raw) {
+  const host = hostOf(raw);
+  if (!host) return false;
+  return (
+    hostEndsWith(host, "live.com") ||
+    hostEndsWith(host, "microsoft.com") ||
+    hostEndsWith(host, "microsoftonline.com") ||
+    hostEndsWith(host, "msauth.net") ||
+    hostEndsWith(host, "msftauth.net") ||
+    hostEndsWith(host, "office.com") ||
+    hostEndsWith(host, "office365.com") ||
+    hostEndsWith(host, "outlook.com") ||
+    host === "accounts.google.com" ||
+    hostEndsWith(host, "google.com") && host.includes("account") ||
+    host === "appleid.apple.com" ||
+    hostEndsWith(host, "apple.com")
+  );
+}
+
+function isAboutBlank(raw) {
+  const s = String(raw || "");
+  return !s || s === "about:blank" || s.startsWith("about:blank");
+}
+
+/** Popups ChatGPT uses for OAuth (often starts as about:blank, then redirects). */
+function isAuthWindowUrl(raw) {
+  return isAboutBlank(raw) || isChatgptUrl(raw) || isExternalIdpUrl(raw);
+}
+
+function loginWindowOptions() {
+  return {
+    width: 560,
+    height: 780,
+    minWidth: 420,
+    minHeight: 560,
+    show: true,
+    frame: true,
+    autoHideMenuBar: true,
+    alwaysOnTop: true,
+    skipTaskbar: false,
+    backgroundColor: "#ffffff",
+    paintWhenInitiallyHidden: true,
+    modal: false,
+    webPreferences: {
+      partition: CHATGPT_PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      backgroundThrottling: false,
+    },
+  };
+}
+
+/** @type {WeakSet<import("electron").BrowserWindow>} */
+const preparedAuthWindows = new WeakSet();
+
+function prepareAuthWindow(win) {
+  if (!win || win.isDestroyed() || preparedAuthWindows.has(win)) return;
+  preparedAuthWindows.add(win);
+  try {
+    win.setAlwaysOnTop(true, "screen-saver");
+    win.setContentProtection(false);
+    win.setSkipTaskbar(false);
+    win.setMenuBarVisibility(false);
+    win.show();
+    win.focus();
+    win.moveTop();
+  } catch (err) {
+    log("prepareAuthWindow chrome failed:", err instanceof Error ? err.message : String(err));
+  }
+  try {
+    win.webContents.setUserAgent(chromeUserAgent());
+  } catch {
+    // ignore
+  }
+  win.webContents.setWindowOpenHandler((details) => handleAuthWindowOpen(details.url));
+  win.webContents.on("did-create-window", (child) => prepareAuthWindow(child));
+  win.webContents.on("did-fail-load", (_e, code, desc, url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return;
+    log("auth window did-fail-load", code, desc, url);
+  });
+}
+
+function handleAuthWindowOpen(url) {
+  log("chatgpt window.open", url);
+  if (isAuthWindowUrl(url)) {
+    return {
+      action: "allow",
+      overrideBrowserWindowOptions: loginWindowOptions(),
+    };
+  }
+  if (url && !isAboutBlank(url)) void shell.openExternal(url);
+  return { action: "deny" };
+}
+
+/** Don't let overlay stealth blank-out Microsoft / Google credential pages. */
+function syncStealthForGuestUrl(url) {
+  if (!mainWindow) return;
+  if (isExternalIdpUrl(url)) {
+    mainWindow.setContentProtection(false);
+    mainWindow.setSkipTaskbar(false);
+    return;
+  }
+  applyStealth(stealthEnabled);
+}
+
+/** Accept a typed address bar value; reject non-http(s) schemes. */
+function normalizeGuestUrl(raw) {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return null;
+  const candidate = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function chatgptSession() {
+  return session.fromPartition(CHATGPT_PARTITION);
+}
+
+function chatgptStatePath() {
+  return path.join(app.getPath("userData"), "chatgpt-view.json");
+}
+
+function readChatgptState() {
+  try {
+    return JSON.parse(fs.readFileSync(chatgptStatePath(), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function writeChatgptState(patch) {
+  try {
+    fs.writeFileSync(chatgptStatePath(), JSON.stringify({ ...readChatgptState(), ...patch }));
+  } catch (err) {
+    log("chatgpt state write failed:", err instanceof Error ? err.message : String(err));
+  }
+}
+
+function clampToDisplay(bounds) {
+  const display = screen.getDisplayMatching(bounds);
+  const wa = display.workArea;
+  const width = Math.min(Math.max(Math.round(bounds.width), 720), wa.width);
+  const height = Math.min(Math.max(Math.round(bounds.height), 560), wa.height);
+  const x = Math.min(Math.max(Math.round(bounds.x), wa.x), wa.x + wa.width - width);
+  const y = Math.min(Math.max(Math.round(bounds.y), wa.y), wa.y + wa.height - height);
+  return { x, y, width, height };
+}
+
+function chatgptHistory(wc) {
+  return wc.navigationHistory;
+}
+
+function sendChatgptNav() {
+  if (!chatgptView || !mainWindow) return;
+  const wc = chatgptView.webContents;
+  const history = chatgptHistory(wc);
+  mainWindow.webContents.send("chatgpt-nav", {
+    url: wc.getURL(),
+    title: wc.getTitle(),
+    canGoBack: Boolean(history?.canGoBack()),
+    canGoForward: Boolean(history?.canGoForward()),
+    loading: wc.isLoading(),
+  });
+}
+
+function applyChatgptBounds() {
+  if (!chatgptView || !chatgptVisible || !lastChatgptGuestBounds) return;
+  const { x, y, width, height } = lastChatgptGuestBounds;
+  chatgptView.setBounds({
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.max(1, Math.round(width)),
+    height: Math.max(1, Math.round(height)),
+  });
+}
+
+function setChatgptVisible(visible) {
+  if (!chatgptView) return;
+  if (typeof chatgptView.setVisible === "function") {
+    chatgptView.setVisible(visible);
+    return;
+  }
+  if (!mainWindow?.contentView) return;
+  const children = mainWindow.contentView.children || [];
+  const attached = children.includes(chatgptView);
+  if (visible && !attached) mainWindow.contentView.addChildView(chatgptView);
+  if (!visible && attached) mainWindow.contentView.removeChildView(chatgptView);
+}
+
+function configureChatgptSession() {
+  clearChatgptBrowserAutofill();
+  const sess = chatgptSession();
+  const ua = chromeUserAgent();
+  sess.setUserAgent(ua);
+
+  const chrome = process.versions.chrome;
+  const chromeMajor = String(chrome).split(".")[0];
+  const chPlatform =
+    process.platform === "win32" ? '"Windows"' : process.platform === "darwin" ? '"macOS"' : '"Linux"';
+  const secChUa = `"Google Chrome";v="${chromeMajor}", "Chromium";v="${chromeMajor}", "Not.A/Brand";v="8"`;
+  const secChUaFull = `"Google Chrome";v="${chrome}", "Chromium";v="${chrome}", "Not.A/Brand";v="10.0.0.4"`;
+
+  sess.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = { ...details.requestHeaders };
+    headers["User-Agent"] = ua;
+    headers["Sec-CH-UA"] = secChUa;
+    headers["Sec-CH-UA-Mobile"] = "?0";
+    headers["Sec-CH-UA-Platform"] = chPlatform;
+    headers["Sec-CH-UA-Full-Version-List"] = secChUaFull;
+    delete headers["X-Electron"];
+    callback({ requestHeaders: headers });
+  });
+
+  sess.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(
+      permission === "clipboard-read" ||
+        permission === "clipboard-sanitized-write" ||
+        permission === "notifications" ||
+        permission === "media"
+    );
+  });
+}
+
+function ensureChatgptView() {
+  if (chatgptView || !mainWindow) return chatgptView;
+  if (typeof WebContentsView !== "function" || !mainWindow.contentView) {
+    log("WebContentsView is not available in this Electron build");
+    mainWindow.webContents.send(
+      "chatgpt-error",
+      "This desktop build cannot embed ChatGPT. Update Interview Coach and try again."
+    );
+    return null;
+  }
+
+  chatgptView = new WebContentsView({
+    webPreferences: {
+      partition: CHATGPT_PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      backgroundThrottling: false,
+    },
+  });
+  const wc = chatgptView.webContents;
+  wc.setUserAgent(chromeUserAgent());
+  wc.setWindowOpenHandler((details) => handleAuthWindowOpen(details.url));
+  wc.on("did-create-window", (child) => prepareAuthWindow(child));
+  wc.on("did-navigate", (_e, url) => {
+    if (shouldRememberChatgptUrl(url)) writeChatgptState({ lastUrl: url });
+    syncStealthForGuestUrl(url);
+    sendChatgptNav();
+  });
+  wc.on("did-navigate-in-page", (_e, url) => {
+    if (shouldRememberChatgptUrl(url)) writeChatgptState({ lastUrl: url });
+    syncStealthForGuestUrl(url);
+    sendChatgptNav();
+  });
+  wc.on("did-redirect-navigation", (_e, url) => {
+    syncStealthForGuestUrl(url);
+  });
+  wc.on("did-start-loading", sendChatgptNav);
+  wc.on("did-stop-loading", sendChatgptNav);
+  wc.on("page-title-updated", sendChatgptNav);
+  wc.on("did-fail-load", (_e, code, desc, _url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return;
+    mainWindow?.webContents.send("chatgpt-error", desc || "Could not load ChatGPT.");
+    sendChatgptNav();
+  });
+
+  const savedUrl = readChatgptState().lastUrl;
+  wc.loadURL(
+    typeof savedUrl === "string" && shouldRememberChatgptUrl(savedUrl)
+      ? savedUrl
+      : CHATGPT_HOME
+  );
+  mainWindow.contentView.addChildView(chatgptView);
+  setChatgptVisible(false);
+  return chatgptView;
+}
+
+function showChatgpt() {
+  if (!mainWindow) return;
+  if (chatgptLeaveTimer) {
+    clearTimeout(chatgptLeaveTimer);
+    chatgptLeaveTimer = null;
+  }
+  if (!chatgptVisible) {
+    overlayBoundsBeforeChatgpt = mainWindow.getBounds();
+    mainWindow.setMinimumSize(720, 560);
+    mainWindow.setOpacity(1);
+    const saved = readChatgptState().bounds;
+    if (saved && typeof saved.width === "number") {
+      mainWindow.setBounds(clampToDisplay(saved));
+    } else {
+      const b = mainWindow.getBounds();
+      mainWindow.setSize(Math.max(b.width, 1100), Math.max(b.height, 760));
+    }
+  }
+  ensureChatgptView();
+  if (chatgptView) {
+    setChatgptVisible(true);
+    applyChatgptBounds();
+    sendChatgptNav();
+  }
+  chatgptVisible = true;
+}
+
+function hideChatgpt() {
+  if (!chatgptVisible) return;
+  if (mainWindow) {
+    writeChatgptState({ bounds: mainWindow.getBounds() });
+    if (overlayBoundsBeforeChatgpt) {
+      mainWindow.setMinimumSize(300, 380);
+      mainWindow.setBounds(overlayBoundsBeforeChatgpt);
+      overlayBoundsBeforeChatgpt = null;
+    }
+    mainWindow.setOpacity(currentOpacity);
+  }
+  if (chatgptView) setChatgptVisible(false);
+  chatgptVisible = false;
+  applyStealth(stealthEnabled);
+}
+
+ipcMain.handle("chatgpt:enter", () => showChatgpt());
+ipcMain.handle("chatgpt:leave", () => {
+  if (chatgptLeaveTimer) clearTimeout(chatgptLeaveTimer);
+  chatgptLeaveTimer = setTimeout(() => {
+    chatgptLeaveTimer = null;
+    hideChatgpt();
+  }, 250);
+});
+ipcMain.on("chatgpt:layout", (_e, bounds) => {
+  if (!bounds || typeof bounds.width !== "number") return;
+  lastChatgptGuestBounds = bounds;
+  applyChatgptBounds();
+});
+ipcMain.handle("chatgpt:reload", () => chatgptView?.webContents.reload());
+ipcMain.handle("chatgpt:home", () => chatgptView?.webContents.loadURL(CHATGPT_HOME));
+ipcMain.handle("chatgpt:navigate", (_e, raw) => {
+  const url = normalizeGuestUrl(raw);
+  if (!url) return { ok: false, error: "Enter a valid http(s) address." };
+  if (!chatgptView) return { ok: false, error: "ChatGPT is not open." };
+  chatgptView.webContents.loadURL(url);
+  return { ok: true, url };
+});
+ipcMain.handle("chatgpt:back", () => {
+  const history = chatgptView?.webContents.navigationHistory;
+  if (history?.canGoBack()) history.goBack();
+});
+ipcMain.handle("chatgpt:forward", () => {
+  const history = chatgptView?.webContents.navigationHistory;
+  if (history?.canGoForward()) history.goForward();
+});
+ipcMain.handle("chatgpt:clear-session", async () => {
+  await chatgptSession().clearStorageData();
+  await chatgptSession().cookies.flushStore();
+  writeChatgptState({ lastUrl: CHATGPT_HOME });
+  await chatgptView?.webContents.loadURL(CHATGPT_HOME);
+});
+
+// <webview> is unused; deny any unexpected guest tag.
+app.on("web-contents-created", (_event, contents) => {
+  contents.on("will-attach-webview", (event) => {
+    event.preventDefault();
+  });
+});
+
 app.whenReady().then(async () => {
   log("app ready. packaged:", app.isPackaged, "resources:", process.resourcesPath);
+  configureChatgptSession();
   try {
     await ensureServer();
   } catch (err) {
@@ -419,6 +920,15 @@ app.whenReady().then(async () => {
   }
   createWindow();
   registerShortcuts();
+
+  app.on("browser-window-created", (_e, win) => {
+    if (win === mainWindow || win.isDestroyed()) return;
+    try {
+      if (win.webContents.session === chatgptSession()) prepareAuthWindow(win);
+    } catch {
+      // ignore
+    }
+  });
 
   // Check GitHub Releases for a newer version and install it in the background.
   if (app.isPackaged && autoUpdater) {
@@ -440,4 +950,9 @@ app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   stopCaptions();
   if (serverProcess && !serverProcess.killed) serverProcess.kill();
+  try {
+    chatgptSession().cookies.flushStore();
+  } catch {
+    // Partition may not have been used this run.
+  }
 });

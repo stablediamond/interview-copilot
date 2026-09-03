@@ -40,6 +40,28 @@ contextBridge.exposeInMainWorld("electronAPI", {
       return () => ipcRenderer.removeListener("coding-capture", handler);
     },
   },
+  // Embedded ChatGPT: native WebContentsView over the ChatGPT page.
+  chatgpt: {
+    enter: () => ipcRenderer.invoke("chatgpt:enter"),
+    leave: () => ipcRenderer.invoke("chatgpt:leave"),
+    layout: (bounds) => ipcRenderer.send("chatgpt:layout", bounds),
+    reload: () => ipcRenderer.invoke("chatgpt:reload"),
+    home: () => ipcRenderer.invoke("chatgpt:home"),
+    navigate: (url) => ipcRenderer.invoke("chatgpt:navigate", url),
+    goBack: () => ipcRenderer.invoke("chatgpt:back"),
+    goForward: () => ipcRenderer.invoke("chatgpt:forward"),
+    clearSession: () => ipcRenderer.invoke("chatgpt:clear-session"),
+    onNav: (callback) => {
+      const handler = (_e, state) => callback(state);
+      ipcRenderer.on("chatgpt-nav", handler);
+      return () => ipcRenderer.removeListener("chatgpt-nav", handler);
+    },
+    onError: (callback) => {
+      const handler = (_e, message) => callback(message);
+      ipcRenderer.on("chatgpt-error", handler);
+      return () => ipcRenderer.removeListener("chatgpt-error", handler);
+    },
+  },
   // Windows Live Captions bridge.
   liveCaptions: {
     start: () => ipcRenderer.send("livecaptions:start"),

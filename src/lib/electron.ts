@@ -8,6 +8,21 @@ export interface CodingSource {
   displayId: string;
 }
 
+export interface ChatgptNavState {
+  url: string;
+  title: string;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  loading: boolean;
+}
+
+export interface ChatgptBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface ElectronAPI {
   isElectron: true;
   platform: NodeJS.Platform;
@@ -36,6 +51,19 @@ export interface ElectronAPI {
     start: () => void;
     stop: () => void;
     onText: (callback: (text: string) => void) => () => void;
+    onError: (callback: (message: string) => void) => () => void;
+  };
+  chatgpt: {
+    enter: () => Promise<void>;
+    leave: () => Promise<void>;
+    layout: (bounds: ChatgptBounds) => void;
+    reload: () => Promise<void>;
+    home: () => Promise<void>;
+    navigate: (url: string) => Promise<{ ok: boolean; url?: string; error?: string }>;
+    goBack: () => Promise<void>;
+    goForward: () => Promise<void>;
+    clearSession: () => Promise<void>;
+    onNav: (callback: (state: ChatgptNavState) => void) => () => void;
     onError: (callback: (message: string) => void) => () => void;
   };
 }

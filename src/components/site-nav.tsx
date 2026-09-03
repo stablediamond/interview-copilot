@@ -19,7 +19,7 @@ export function SiteNav() {
           </span>
           <span className="hidden sm:inline">Interview Coach</span>
         </Link>
-        <nav className="flex flex-1 items-center gap-1 text-sm">
+        <nav className="flex flex-1 items-center gap-1 overflow-x-auto text-sm scrollbar-thin">
           {NAV_ITEMS.map((item) => {
             const active =
               pathname === item.href || pathname.startsWith(`${item.href}/`);
