@@ -1,4 +1,5 @@
 import { isJobTrackConfigured } from "./job-track";
+import { getElectronAPI } from "./electron";
 
 const STORAGE_KEY = "interview-coach.job-track.session";
 
@@ -11,7 +12,7 @@ export interface StoredSession {
   privilege?: string;
 }
 
-function readSession(): StoredSession | null {
+function readLocalSession(): StoredSession | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -21,7 +22,7 @@ function readSession(): StoredSession | null {
   }
 }
 
-function writeSession(session: StoredSession | null) {
+function writeLocalSession(session: StoredSession | null) {
   if (typeof window === "undefined") return;
   try {
     if (session) {
@@ -31,6 +32,34 @@ function writeSession(session: StoredSession | null) {
     }
   } catch {
     // ignore quota/availability errors
+  }
+}
+
+async function loadSession(): Promise<StoredSession | null> {
+  const api = getElectronAPI();
+  if (api?.jobTrack) {
+    try {
+      const stored = await api.jobTrack.getSession();
+      if (stored && typeof stored.token === "string") {
+        writeLocalSession(stored);
+        return stored;
+      }
+    } catch {
+      // Fall through to localStorage (browser / older shells).
+    }
+  }
+  return readLocalSession();
+}
+
+async function persistSession(session: StoredSession | null) {
+  writeLocalSession(session);
+  const api = getElectronAPI();
+  if (api?.jobTrack) {
+    try {
+      await api.jobTrack.setSession(session);
+    } catch {
+      // Disk write is best-effort; localStorage still holds the copy this run.
+    }
   }
 }
 
@@ -52,11 +81,11 @@ interface LoginFailure {
 }
 
 export function getStoredEmail(): string | null {
-  return readSession()?.email ?? null;
+  return readLocalSession()?.email ?? null;
 }
 
 export function hasSession(): boolean {
-  return Boolean(readSession());
+  return Boolean(readLocalSession());
 }
 
 /** Sign in with a Job Track email + password. */
@@ -84,7 +113,7 @@ export async function signIn(email: string, password: string): Promise<void> {
 
   const { token, email: signedEmail, expiresIn, firstname, lastname, privilege } =
     payload.data;
-  writeSession({
+  await persistSession({
     token,
     email: signedEmail || email,
     expiresAt: Date.now() + Math.max(60, expiresIn) * 1000,
@@ -95,8 +124,8 @@ export async function signIn(email: string, password: string): Promise<void> {
 }
 
 export async function signOut(): Promise<void> {
-  const session = readSession();
-  writeSession(null);
+  const session = (await loadSession()) ?? readLocalSession();
+  await persistSession(null);
   if (!session) return;
   try {
     await fetch("/api/auth/logout", {
@@ -113,10 +142,10 @@ export async function signOut(): Promise<void> {
  */
 export async function getValidAccessToken(): Promise<string | null> {
   if (!isJobTrackConfigured()) return null;
-  const session = readSession();
+  const session = await loadSession();
   if (!session) return null;
   if (Date.now() >= session.expiresAt) {
-    writeSession(null);
+    await persistSession(null);
     return null;
   }
   return session.token;

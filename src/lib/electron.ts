@@ -23,6 +23,15 @@ export interface ChatgptBounds {
   height: number;
 }
 
+export interface JobTrackStoredSession {
+  token: string;
+  email: string;
+  expiresAt: number;
+  firstname?: string;
+  lastname?: string;
+  privilege?: string;
+}
+
 export interface ElectronAPI {
   isElectron: true;
   platform: NodeJS.Platform;
@@ -65,6 +74,10 @@ export interface ElectronAPI {
     clearSession: () => Promise<void>;
     onNav: (callback: (state: ChatgptNavState) => void) => () => void;
     onError: (callback: (message: string) => void) => () => void;
+  };
+  jobTrack: {
+    getSession: () => Promise<JobTrackStoredSession | null>;
+    setSession: (session: JobTrackStoredSession | null) => Promise<boolean>;
   };
 }
 

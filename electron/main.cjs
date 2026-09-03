@@ -18,6 +18,53 @@ const net = require("net");
 const fs = require("fs");
 const { spawn } = require("child_process");
 
+// Pin userData BEFORE requiring electron-updater (it reads this path on import)
+// and before any other getPath("userData") call. Packaged Windows otherwise
+// flips between "%APPDATA%\Interview Coach" (productName) and
+// "%APPDATA%\InterviewCoach" (setName) / "interview-coach" (package name),
+// which looks like Job Track + ChatGPT logins resetting every launch.
+app.setName("InterviewCoach");
+{
+  const dest = path.join(app.getPath("appData"), "InterviewCoach");
+  try {
+    fs.mkdirSync(dest, { recursive: true });
+  } catch {
+    // ignore
+  }
+  if (!fs.existsSync(path.join(dest, "Partitions"))) {
+    for (const legacyName of ["Interview Coach", "interview-coach"]) {
+      const src = path.join(app.getPath("appData"), legacyName);
+      if (src === dest || !fs.existsSync(src)) continue;
+      const hasProfile =
+        fs.existsSync(path.join(src, "Partitions")) ||
+        fs.existsSync(path.join(src, "Local Storage"));
+      if (!hasProfile) continue;
+      for (const name of [
+        "Partitions",
+        "Local Storage",
+        "Session Storage",
+        "Cookies",
+        "Cookies-journal",
+        "Network",
+        "chatgpt-view.json",
+        "job-track-session.json",
+        "interview-coach.db",
+      ]) {
+        const from = path.join(src, name);
+        const to = path.join(dest, name);
+        if (!fs.existsSync(from) || fs.existsSync(to)) continue;
+        try {
+          fs.cpSync(from, to, { recursive: true });
+        } catch {
+          // ignore individual copy failures
+        }
+      }
+      break;
+    }
+  }
+  app.setPath("userData", dest);
+}
+
 // Optional: present only in packaged builds. Guarded so dev/source runs don't
 // fail if it isn't installed.
 let autoUpdater = null;
@@ -26,12 +73,6 @@ try {
 } catch {
   autoUpdater = null;
 }
-
-// Pin a space-free app name so userData / log / DB paths are deterministic and
-// safe for the Prisma SQLite file: URL (%APPDATA%\InterviewCoach). The
-// user-facing product name is still "Interview Coach" (build.productName).
-// Must run before the app is ready.
-app.setName("InterviewCoach");
 
 // Must run before app.ready. Chromium 152+ (Electron 44) blocks third-party
 // cookies and advertises an Electron brand in Client Hints — both break
@@ -515,25 +556,6 @@ function shouldRememberChatgptUrl(raw) {
   }
 }
 
-/** Drop Chromium's saved usernames for this partition (not ChatGPT cookies). */
-function clearChatgptBrowserAutofill() {
-  const dir = path.join(app.getPath("userData"), "Partitions", "chatgpt");
-  for (const name of [
-    "Login Data",
-    "Login Data-journal",
-    "Login Data For Account",
-    "Login Data For Account-journal",
-    "Web Data",
-    "Web Data-journal",
-  ]) {
-    try {
-      fs.unlinkSync(path.join(dir, name));
-    } catch {
-      // File may not exist yet, or Chromium already has it open.
-    }
-  }
-}
-
 function hostEndsWith(host, suffix) {
   return host === suffix || host.endsWith(`.${suffix}`);
 }
@@ -737,7 +759,6 @@ function setChatgptVisible(visible) {
 }
 
 function configureChatgptSession() {
-  clearChatgptBrowserAutofill();
   const sess = chatgptSession();
   const ua = chromeUserAgent();
   sess.setUserAgent(ua);
@@ -814,7 +835,12 @@ function ensureChatgptView() {
     syncStealthForGuestUrl(url);
   });
   wc.on("did-start-loading", sendChatgptNav);
-  wc.on("did-stop-loading", sendChatgptNav);
+  wc.on("did-stop-loading", () => {
+    sendChatgptNav();
+    // Windows packaged runs often exit before Chromium's periodic cookie
+    // write; flush after each load so ChatGPT login survives the next launch.
+    chatgptSession().cookies.flushStore().catch(() => {});
+  });
   wc.on("page-title-updated", sendChatgptNav);
   wc.on("did-fail-load", (_e, code, desc, _url, isMainFrame) => {
     if (!isMainFrame || code === -3) return;
@@ -913,6 +939,41 @@ ipcMain.handle("chatgpt:clear-session", async () => {
   await chatgptView?.webContents.loadURL(CHATGPT_HOME);
 });
 
+function jobTrackSessionPath() {
+  return path.join(app.getPath("userData"), "job-track-session.json");
+}
+
+ipcMain.handle("job-track:get-session", () => {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(jobTrackSessionPath(), "utf8"));
+    if (!parsed || typeof parsed.token !== "string") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle("job-track:set-session", (_e, session) => {
+  try {
+    if (!session) {
+      fs.unlinkSync(jobTrackSessionPath());
+      return true;
+    }
+    if (typeof session !== "object" || typeof session.token !== "string") {
+      return false;
+    }
+    fs.writeFileSync(jobTrackSessionPath(), JSON.stringify(session));
+    return true;
+  } catch (err) {
+    if (session == null) return true;
+    log(
+      "job-track session write failed:",
+      err instanceof Error ? err.message : String(err)
+    );
+    return false;
+  }
+});
+
 // <webview> is unused; deny any unexpected guest tag.
 app.on("web-contents-created", (_event, contents) => {
   contents.on("will-attach-webview", (event) => {
@@ -921,7 +982,14 @@ app.on("web-contents-created", (_event, contents) => {
 });
 
 app.whenReady().then(async () => {
-  log("app ready. packaged:", app.isPackaged, "resources:", process.resourcesPath);
+  log(
+    "app ready. packaged:",
+    app.isPackaged,
+    "userData:",
+    app.getPath("userData"),
+    "resources:",
+    process.resourcesPath
+  );
   configureChatgptSession();
   try {
     await ensureServer();
@@ -956,13 +1024,33 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
+let flushingQuit = false;
+app.on("before-quit", (event) => {
+  if (flushingQuit) return;
+  event.preventDefault();
+  flushingQuit = true;
+  void (async () => {
+    try {
+      if (typeof session.defaultSession.flushStorageData === "function") {
+        session.defaultSession.flushStorageData();
+      }
+      if (typeof chatgptSession().flushStorageData === "function") {
+        chatgptSession().flushStorageData();
+      }
+      await Promise.all([
+        session.defaultSession.cookies.flushStore(),
+        chatgptSession().cookies.flushStore(),
+      ]);
+    } catch (err) {
+      log("storage flush failed:", err instanceof Error ? err.message : String(err));
+    } finally {
+      app.quit();
+    }
+  })();
+});
+
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   stopCaptions();
   if (serverProcess && !serverProcess.killed) serverProcess.kill();
-  try {
-    chatgptSession().cookies.flushStore();
-  } catch {
-    // Partition may not have been used this run.
-  }
 });

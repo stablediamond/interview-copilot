@@ -62,6 +62,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
       return () => ipcRenderer.removeListener("chatgpt-error", handler);
     },
   },
+  jobTrack: {
+    getSession: () => ipcRenderer.invoke("job-track:get-session"),
+    setSession: (session) => ipcRenderer.invoke("job-track:set-session", session),
+  },
   // Windows Live Captions bridge.
   liveCaptions: {
     start: () => ipcRenderer.send("livecaptions:start"),
