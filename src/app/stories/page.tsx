@@ -6,7 +6,6 @@ import { Plus, Pencil, Trash2, Sparkles, Wand2, BookText } from "lucide-react";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";

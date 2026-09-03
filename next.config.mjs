@@ -1,6 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Electron loads http://127.0.0.1 (not localhost) so IPv6 ::1 never blanks
+  // the window. Next 16 blocks that as a cross-origin HMR request otherwise.
+  allowedDevOrigins: ["127.0.0.1"],
+  // Custom webpack is still required: Edge compilation of instrumentation.ts
+  // otherwise follows Node fs/Prisma imports and 500s GET /. Next 16 defaults
+  // to Turbopack, so `next dev` / `next build` pass `--webpack`.
   webpack: (config, { nextRuntime, webpack }) => {
     // instrumentation.ts dynamically imports migrate-runtime (Node fs + Prisma).
     // Next also compiles that graph for Edge, which has no `fs` and 500s GET /.
@@ -37,10 +43,6 @@ const nextConfig = {
       // Bundled so the runtime migration applier can upgrade the user's DB.
       "./prisma/migrations/**",
     ],
-  },
-  eslint: {
-    // Linting is run separately via `npm run lint`; don't block production builds.
-    ignoreDuringBuilds: true,
   },
 };
 

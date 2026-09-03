@@ -792,9 +792,11 @@ function ensureChatgptView() {
   });
   // Default WebContentsView fill is opaque white, which blocks the overlay
   // opacity. Transparent chrome lets BrowserWindow.setOpacity apply to ChatGPT.
-  chatgptView.setBackgroundColor("#00000000");
+  // setBackgroundColor lives on the View, not webContents.
+  if (typeof chatgptView.setBackgroundColor === "function") {
+    chatgptView.setBackgroundColor("#00000000");
+  }
   const wc = chatgptView.webContents;
-  wc.setBackgroundColor("#00000000");
   wc.setUserAgent(chromeUserAgent());
   wc.setWindowOpenHandler((details) => handleAuthWindowOpen(details.url));
   wc.on("did-create-window", (child) => prepareAuthWindow(child));
