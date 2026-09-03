@@ -83,6 +83,10 @@ function applyStealth(enabled) {
   mainWindow.setSkipTaskbar(stealthEnabled);
 }
 
+function applyWindowOpacity() {
+  mainWindow?.setOpacity(currentOpacity);
+}
+
 /** Flip stealth and notify the renderer so its UI stays in sync (used by hotkey). */
 function toggleStealth() {
   applyStealth(!stealthEnabled);
@@ -219,7 +223,7 @@ function createWindow() {
   mainWindow.setAlwaysOnTop(true, "screen-saver");
   // Start slightly translucent so it blends over the call. Adjustable from the
   // titlebar.
-  mainWindow.setOpacity(currentOpacity);
+  applyWindowOpacity();
   // Exclude from screen capture immediately, before the first frame is shown,
   // so there's never a capturable moment.
   applyStealth(stealthEnabled);
@@ -323,7 +327,7 @@ ipcMain.handle("win:toggle-pin", () => {
 ipcMain.handle("win:cycle-opacity", () => {
   const idx = OPACITY_STEPS.findIndex((v) => Math.abs(v - currentOpacity) < 0.01);
   currentOpacity = OPACITY_STEPS[(idx + 1) % OPACITY_STEPS.length];
-  mainWindow?.setOpacity(currentOpacity);
+  applyWindowOpacity();
   return currentOpacity;
 });
 
@@ -786,7 +790,11 @@ function ensureChatgptView() {
       backgroundThrottling: false,
     },
   });
+  // Default WebContentsView fill is opaque white, which blocks the overlay
+  // opacity. Transparent chrome lets BrowserWindow.setOpacity apply to ChatGPT.
+  chatgptView.setBackgroundColor("#00000000");
   const wc = chatgptView.webContents;
+  wc.setBackgroundColor("#00000000");
   wc.setUserAgent(chromeUserAgent());
   wc.setWindowOpenHandler((details) => handleAuthWindowOpen(details.url));
   wc.on("did-create-window", (child) => prepareAuthWindow(child));
@@ -832,7 +840,7 @@ function showChatgpt() {
   if (!chatgptVisible) {
     overlayBoundsBeforeChatgpt = mainWindow.getBounds();
     mainWindow.setMinimumSize(720, 560);
-    mainWindow.setOpacity(1);
+    applyWindowOpacity();
     const saved = readChatgptState().bounds;
     if (saved && typeof saved.width === "number") {
       mainWindow.setBounds(clampToDisplay(saved));
@@ -859,7 +867,7 @@ function hideChatgpt() {
       mainWindow.setBounds(overlayBoundsBeforeChatgpt);
       overlayBoundsBeforeChatgpt = null;
     }
-    mainWindow.setOpacity(currentOpacity);
+    applyWindowOpacity();
   }
   if (chatgptView) setChatgptVisible(false);
   chatgptVisible = false;
