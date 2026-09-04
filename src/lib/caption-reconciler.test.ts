@@ -65,3 +65,23 @@ test("reconciler does not double-commit a phrase repeated within one snapshot", 
   const { finals } = reconciler.push("I built Canvas. I built Canvas. Then I left.");
   assert.deepEqual(finals, ["I built Canvas."]);
 });
+
+test("checkpoint ignores already-heard text and only emits what follows", () => {
+  const reconciler = new CaptionReconciler();
+  reconciler.push("Tell me about yourself. What are your strengths");
+  reconciler.checkpoint();
+  const next = reconciler.push(
+    "Tell me about yourself. What are your strengths? Why this company?"
+  );
+  assert.deepEqual(next.finals, []);
+  assert.equal(next.interim, "Why this company?");
+});
+
+test("checkpoint drops a replay of the same rolling window after Clear", () => {
+  const reconciler = new CaptionReconciler();
+  reconciler.push("Tell me about yourself. What are your strengths");
+  reconciler.checkpoint("Tell me about yourself. What are your strengths");
+  const replay = reconciler.push("Tell me about yourself. What are your strengths");
+  assert.deepEqual(replay.finals, []);
+  assert.equal(replay.interim, "");
+});

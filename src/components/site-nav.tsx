@@ -17,7 +17,7 @@ export function SiteNav() {
           <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
             <Mic className="h-4 w-4" />
           </span>
-          <span className="hidden sm:inline">Interview Coach</span>
+          <span className="hidden sm:inline">Interview Copilot</span>
         </Link>
         <nav className="flex flex-1 items-center gap-1 overflow-x-auto text-sm scrollbar-thin">
           {NAV_ITEMS.map((item) => {

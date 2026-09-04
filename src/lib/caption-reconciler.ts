@@ -108,19 +108,56 @@ export class CaptionReconciler {
   // Normalized text of every fragment already emitted — a hard dedup backstop.
   #seen = new Set<string>();
   #live = "";
+  #lastSnap = "";
+  // Full window at the last Clear/Answer — used so the next LC snapshot of the
+  // same (or shorter) text is dropped instead of re-pasted into the textarea.
+  #consumedNorm: string[] = [];
 
   reset() {
     this.#committedTail = [];
     this.#seen = new Set();
+    this.#live = "";
+    this.#lastSnap = "";
+    this.#consumedNorm = [];
+  }
+
+  /**
+   * Treat everything heard so far as already consumed. Later snapshots only
+   * emit speech that starts after this point. Pass the textarea text so a
+   * Clear/Answer cannot be undone by the next rolling-window snapshot.
+   */
+  checkpoint(extraText = "") {
+    const pieces = [this.#lastSnap, this.#live, extraText]
+      .map((s) => s.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    const tokens: string[] = [];
+    for (const piece of pieces) tokens.push(...tokenize(piece));
+    if (this.#committedTail.length) tokens.unshift(...this.#committedTail);
+
+    if (tokens.length > 0) {
+      this.#committedTail.push(...tokenize(this.#live), ...tokenize(extraText));
+      if (this.#committedTail.length > TAIL_MAX) {
+        this.#committedTail = this.#committedTail.slice(-TAIL_MAX);
+      }
+      this.#consumedNorm = tokens.map(normWord).filter(Boolean);
+      const key = sentenceKey(pieces.join(" "));
+      if (key) this.#seen.add(key);
+    }
     this.#live = "";
   }
 
   push(snapshot: string): { finals: string[]; interim: string } {
     const snap = snapshot.replace(/\s+/g, " ").trim();
     if (!snap) return { finals: [], interim: this.#live };
+    this.#lastSnap = snap;
 
     const finals: string[] = [];
-    let remaining = this.#alignLive(tokenize(snap));
+    const snapTokens = tokenize(snap);
+    if (this.#isAlreadyConsumed(snapTokens)) {
+      this.#live = "";
+      return { finals: [], interim: "" };
+    }
+    let remaining = this.#alignLive(snapTokens);
 
     // 1) Commit completed sentences: everything before the last sentence is
     //    stable because a newer sentence has started after it.
@@ -180,7 +217,21 @@ export class CaptionReconciler {
   // Strip the part of the snapshot that overlaps the committed tail and return
   // the remaining (live) tokens.
   #alignLive(snapTokens: string[]): string[] {
+    const fromConsumed =
+      this.#consumedNorm.length > 0
+        ? stripLeadingOverlap(this.#consumedNorm, snapTokens)
+        : snapTokens;
+    if (fromConsumed.length < snapTokens.length) return fromConsumed;
     return stripLeadingOverlap(this.#committedTail.map(normWord), snapTokens);
+  }
+
+  #isAlreadyConsumed(snapTokens: string[]): boolean {
+    if (this.#consumedNorm.length === 0 || snapTokens.length === 0) return false;
+    const snapKey = snapTokens.map(normWord).filter(Boolean).join(" ");
+    if (!snapKey) return false;
+    const consumedKey = this.#consumedNorm.filter(Boolean).join(" ");
+    if (consumedKey.includes(snapKey)) return true;
+    return stripLeadingOverlap(this.#consumedNorm, snapTokens).length === 0;
   }
 }
 

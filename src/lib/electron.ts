@@ -72,6 +72,10 @@ export interface ElectronAPI {
     goBack: () => Promise<void>;
     goForward: () => Promise<void>;
     clearSession: () => Promise<void>;
+    submit: (text: string) => Promise<{ ok: boolean; error?: string }>;
+    zoomIn: () => Promise<number>;
+    zoomOut: () => Promise<number>;
+    getZoom: () => Promise<number>;
     onNav: (callback: (state: ChatgptNavState) => void) => () => void;
     onError: (callback: (message: string) => void) => () => void;
   };

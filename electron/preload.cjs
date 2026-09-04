@@ -51,6 +51,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     goBack: () => ipcRenderer.invoke("chatgpt:back"),
     goForward: () => ipcRenderer.invoke("chatgpt:forward"),
     clearSession: () => ipcRenderer.invoke("chatgpt:clear-session"),
+    submit: (text) => ipcRenderer.invoke("chatgpt:submit", text),
+    zoomIn: () => ipcRenderer.invoke("chatgpt:zoom-in"),
+    zoomOut: () => ipcRenderer.invoke("chatgpt:zoom-out"),
+    getZoom: () => ipcRenderer.invoke("chatgpt:get-zoom"),
     onNav: (callback) => {
       const handler = (_e, state) => callback(state);
       ipcRenderer.on("chatgpt-nav", handler);

@@ -34,8 +34,15 @@ export function useLiveCaptions({
     unsubText.current = null;
     unsubError.current?.();
     unsubError.current = null;
-    reconciler.current.reset();
     setState("idle");
+  }, []);
+
+  const checkpoint = React.useCallback((extraText = "") => {
+    reconciler.current.checkpoint(extraText);
+  }, []);
+
+  const reset = React.useCallback(() => {
+    reconciler.current.reset();
   }, []);
 
   const start = React.useCallback(() => {
@@ -48,8 +55,8 @@ export function useLiveCaptions({
       onErrorRef.current?.("Live Captions capture is Windows-only.");
       return;
     }
+    if (unsubText.current) return;
 
-    reconciler.current.reset();
     unsubText.current = api.liveCaptions.onText((text) => {
       const { finals, interim } = reconciler.current.push(text);
       for (const sentence of finals) onTranscriptRef.current(sentence, true);
@@ -62,7 +69,13 @@ export function useLiveCaptions({
     setState("recording");
   }, []);
 
-  React.useEffect(() => () => stop(), [stop]);
+  React.useEffect(
+    () => () => {
+      stop();
+      reset();
+    },
+    [stop, reset]
+  );
 
-  return { state, start, stop, isRecording: state === "recording" };
+  return { state, start, stop, checkpoint, reset, isRecording: state === "recording" };
 }

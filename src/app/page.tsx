@@ -46,7 +46,7 @@ export default function HomePage() {
   return (
     <div className="space-y-8">
       <section className="space-y-3">
-        <h1 className="text-3xl font-bold tracking-tight">Interview Coach</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Interview Copilot</h1>
         <p className="max-w-2xl text-muted-foreground">
           A local-first, real-time interview assistant for your own preparation and permitted
           live coaching. It listens to captions or audio, detects the interviewer&apos;s latest

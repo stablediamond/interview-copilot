@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { apiFetch } from "@/lib/client";
-import { getJobTrackUrl, isJobTrackConfigured } from "@/lib/job-track";
+import { isJobTrackConfigured } from "@/lib/job-track";
 import {
   getStoredEmail,
   getValidAccessToken,
@@ -162,17 +162,6 @@ function LoginScreen({ onSignedIn }: { onSignedIn: (email: string) => void }) {
               {busy ? <Spinner /> : <LogIn className="h-4 w-4" />}{" "}
               {busy ? "Signing in…" : "Sign in"}
             </Button>
-            <p className="text-center text-xs text-muted-foreground">
-              No account?{" "}
-              <a
-                href={`${getJobTrackUrl()}/signup`}
-                target="_blank"
-                rel="noreferrer"
-                className="font-medium text-primary underline-offset-4 hover:underline"
-              >
-                Sign up on Job Track
-              </a>
-            </p>
           </form>
         </CardContent>
       </Card>

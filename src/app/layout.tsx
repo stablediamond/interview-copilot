@@ -10,7 +10,7 @@ import { Toaster } from "sonner";
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  title: "Interview Coach",
+  title: "Interview Copilot",
   description:
     "Local-first real-time interview assistant for personal preparation and permitted live coaching.",
 };

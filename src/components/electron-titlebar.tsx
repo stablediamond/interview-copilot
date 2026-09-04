@@ -48,7 +48,7 @@ export function ElectronTitlebar() {
       className="sticky top-0 z-50 flex h-8 shrink-0 items-center justify-between border-b border-border bg-card/90 px-2 backdrop-blur"
     >
       <span className="truncate text-[11px] font-medium text-muted-foreground">
-        Interview Coach — ⌘/Ctrl+Shift+Enter
+        Interview Copilot — ⌘/Ctrl+Shift+Enter
       </span>
       <div style={noDragStyle} className="flex items-center gap-0.5">
         <button

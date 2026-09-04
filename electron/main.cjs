@@ -12,10 +12,14 @@ const {
   desktopCapturer,
   shell,
   screen,
+  Tray,
+  Menu,
+  nativeImage,
 } = require("electron");
 const path = require("path");
 const net = require("net");
 const fs = require("fs");
+const zlib = require("zlib");
 const { spawn } = require("child_process");
 
 // Pin userData BEFORE requiring electron-updater (it reads this path on import)
@@ -114,18 +118,78 @@ let currentOpacity = 0.9;
 // screen but is invisible to Zoom/Meet/Teams share, OBS, and screenshots. The
 // renderer re-syncs this to the user's persisted setting shortly after load.
 let stealthEnabled = true;
+/** @type {ReturnType<typeof setInterval> | null} */
+let stealthRefreshTimer = null;
+
+function stopStealthRefresh() {
+  if (!stealthRefreshTimer) return;
+  clearInterval(stealthRefreshTimer);
+  stealthRefreshTimer = null;
+}
+
+function applyNativeCaptureExclusion(exclude) {
+  if (process.platform !== "win32" || !mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const { setCaptureExcluded } = require("./win-affinity.cjs");
+    setCaptureExcluded(mainWindow, exclude);
+  } catch (err) {
+    log(
+      "native capture exclusion failed:",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+}
+
+function startStealthRefresh() {
+  stopStealthRefresh();
+  if (!stealthEnabled) return;
+  stealthRefreshTimer = setInterval(() => {
+    if (!stealthEnabled || !mainWindow || mainWindow.isDestroyed()) {
+      stopStealthRefresh();
+      return;
+    }
+    if (!mainWindow.isVisible()) return;
+    applyNativeCaptureExclusion(true);
+  }, 1500);
+}
 
 /** Apply the current stealth state to the window (content protection + taskbar). */
 function applyStealth(enabled) {
   stealthEnabled = Boolean(enabled);
-  if (!mainWindow) return;
-  // setContentProtection -> WDA_EXCLUDEFROMCAPTURE (Windows) / sharingType none (macOS).
-  mainWindow.setContentProtection(stealthEnabled);
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (!stealthEnabled) stopStealthRefresh();
+    return;
+  }
+
   mainWindow.setSkipTaskbar(stealthEnabled);
+
+  // WDA_EXCLUDEFROMCAPTURE is ignored until the HWND exists and is shown.
+  if (!mainWindow.isVisible()) return;
+
+  // Electron 36.3.2+: the window must be WS_EX_LAYERED (any opacity, including
+  // 1.0) *before* capture exclusion, or Zoom/Meet still see it.
+  try {
+    mainWindow.setOpacity(currentOpacity);
+  } catch {
+    // ignore
+  }
+  try {
+    mainWindow.setContentProtection(stealthEnabled);
+  } catch (err) {
+    log(
+      "setContentProtection failed:",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+  applyNativeCaptureExclusion(stealthEnabled);
+  if (stealthEnabled) startStealthRefresh();
+  else stopStealthRefresh();
 }
 
 function applyWindowOpacity() {
-  mainWindow?.setOpacity(currentOpacity);
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.setOpacity(currentOpacity);
+  applyStealth(stealthEnabled);
 }
 
 /** Flip stealth and notify the renderer so its UI stays in sync (used by hotkey). */
@@ -243,16 +307,86 @@ async function ensureServer() {
   await waitForPort(PORT);
 }
 
+const WINDOW_MIN_WIDTH = 300;
+const WINDOW_MIN_HEIGHT = 380;
+const DEFAULT_WINDOW_BOUNDS = { width: 400, height: 600 };
+/** @type {ReturnType<typeof setTimeout> | null} */
+let persistWindowTimer = null;
+
+function windowStatePath() {
+  return path.join(app.getPath("userData"), "window-state.json");
+}
+
+function readWindowState() {
+  try {
+    return JSON.parse(fs.readFileSync(windowStatePath(), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeWindowState(bounds) {
+  try {
+    fs.writeFileSync(windowStatePath(), JSON.stringify(bounds));
+  } catch (err) {
+    log("window state write failed:", err instanceof Error ? err.message : String(err));
+  }
+}
+
+function clampToDisplay(bounds) {
+  const display = screen.getDisplayMatching(bounds);
+  const wa = display.workArea;
+  const width = Math.min(Math.max(Math.round(bounds.width), WINDOW_MIN_WIDTH), wa.width);
+  const height = Math.min(Math.max(Math.round(bounds.height), WINDOW_MIN_HEIGHT), wa.height);
+  const x = Math.min(Math.max(Math.round(bounds.x), wa.x), wa.x + wa.width - width);
+  const y = Math.min(Math.max(Math.round(bounds.y), wa.y), wa.y + wa.height - height);
+  return { x, y, width, height };
+}
+
+function persistWindowBounds() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const prev = readWindowState() || {};
+  writeWindowState({ ...prev, ...mainWindow.getBounds(), zoom: chatgptZoom });
+}
+
+function schedulePersistWindowBounds() {
+  if (persistWindowTimer) clearTimeout(persistWindowTimer);
+  persistWindowTimer = setTimeout(() => {
+    persistWindowTimer = null;
+    persistWindowBounds();
+  }, 250);
+}
+
+function savedWindowBounds() {
+  const saved = readWindowState();
+  if (
+    !saved ||
+    typeof saved.width !== "number" ||
+    typeof saved.height !== "number"
+  ) {
+    return null;
+  }
+  if (typeof saved.x !== "number" || typeof saved.y !== "number") {
+    return {
+      width: Math.max(WINDOW_MIN_WIDTH, Math.round(saved.width)),
+      height: Math.max(WINDOW_MIN_HEIGHT, Math.round(saved.height)),
+    };
+  }
+  return clampToDisplay(saved);
+}
+
 function createWindow() {
+  const saved = savedWindowBounds();
   mainWindow = new BrowserWindow({
-    width: 400,
-    height: 600,
-    minWidth: 300,
-    minHeight: 380,
+    title: "Interview Copilot",
+    ...(saved ?? DEFAULT_WINDOW_BOUNDS),
+    minWidth: WINDOW_MIN_WIDTH,
+    minHeight: WINDOW_MIN_HEIGHT,
     frame: false,
     show: false,
     alwaysOnTop: true,
     skipTaskbar: false,
+    opacity: currentOpacity,
     backgroundColor: "#0b0b0f",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -262,12 +396,6 @@ function createWindow() {
   });
 
   mainWindow.setAlwaysOnTop(true, "screen-saver");
-  // Start slightly translucent so it blends over the call. Adjustable from the
-  // titlebar.
-  applyWindowOpacity();
-  // Exclude from screen capture immediately, before the first frame is shown,
-  // so there's never a capturable moment.
-  applyStealth(stealthEnabled);
   if (process.platform !== "win32") {
     mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   }
@@ -310,13 +438,31 @@ function createWindow() {
 
   tryLoad();
   mainWindow.once("ready-to-show", () => mainWindow?.show());
-  mainWindow.on("resize", () => applyChatgptBounds());
-  mainWindow.on("close", () => {
-    if (chatgptVisible && mainWindow) {
-      writeChatgptState({ bounds: mainWindow.getBounds() });
-    }
+  // Opacity and capture-exclusion must be set after the window is actually
+  // shown or Windows ignores WDA_EXCLUDEFROMCAPTURE and the overlay leaks
+  // into Zoom/Meet/Teams even while the shield icon says stealth is on.
+  mainWindow.on("show", () => {
+    applyStealth(stealthEnabled);
+    syncTrayToWindow();
   });
+  mainWindow.on("hide", () => syncTrayToWindow());
+  mainWindow.on("minimize", () => syncTrayToWindow());
+  mainWindow.on("restore", () => {
+    applyStealth(stealthEnabled);
+    syncTrayToWindow();
+  });
+  mainWindow.webContents.on("did-finish-load", () => {
+    if (mainWindow?.isVisible()) applyStealth(stealthEnabled);
+  });
+  mainWindow.on("resize", () => {
+    applyChatgptBounds();
+    schedulePersistWindowBounds();
+  });
+  mainWindow.on("move", () => schedulePersistWindowBounds());
+  mainWindow.on("close", () => persistWindowBounds());
   mainWindow.on("closed", () => {
+    stopStealthRefresh();
+    destroyTray();
     chatgptView = null;
     mainWindow = null;
     chatgptVisible = false;
@@ -325,6 +471,100 @@ function createWindow() {
   setTimeout(() => {
     if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
   }, 5000);
+}
+
+/** @type {import("electron").Tray | null} */
+let tray = null;
+
+function crc32(buf) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc ^= buf[i];
+    for (let j = 0; j < 8; j++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const t = Buffer.from(type);
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(Buffer.concat([t, data])));
+  return Buffer.concat([len, t, data, crc]);
+}
+
+function makeTrayPng() {
+  const w = 16;
+  const h = 16;
+  const raw = Buffer.alloc((w * 4 + 1) * h);
+  for (let y = 0; y < h; y++) {
+    raw[(w * 4 + 1) * y] = 0;
+    for (let x = 0; x < w; x++) {
+      const dx = x - 7.5;
+      const dy = y - 7.5;
+      const i = (w * 4 + 1) * y + 1 + x * 4;
+      if (dx * dx + dy * dy <= 7.2 * 7.2) {
+        raw[i] = 56;
+        raw[i + 1] = 189;
+        raw[i + 2] = 248;
+        raw[i + 3] = 255;
+      }
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", zlib.deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+function windowIsOnScreen() {
+  return Boolean(
+    mainWindow &&
+      !mainWindow.isDestroyed() &&
+      mainWindow.isVisible() &&
+      !mainWindow.isMinimized()
+  );
+}
+
+function restoreFromTray() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function destroyTray() {
+  if (!tray) return;
+  tray.destroy();
+  tray = null;
+}
+
+function showTray() {
+  if (tray) return;
+  const icon = nativeImage.createFromBuffer(makeTrayPng());
+  tray = new Tray(icon);
+  tray.setToolTip("Interview Copilot");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Show Interview Copilot", click: restoreFromTray },
+      { type: "separator" },
+      { label: "Quit", click: () => app.quit() },
+    ])
+  );
+  tray.on("click", restoreFromTray);
+}
+
+function syncTrayToWindow() {
+  if (windowIsOnScreen()) destroyTray();
+  else showTray();
 }
 
 function registerShortcuts() {
@@ -504,8 +744,9 @@ const CHATGPT_HOSTS = new Set([
 /** @type {import("electron").WebContentsView | null} */
 let chatgptView = null;
 let chatgptVisible = false;
-/** @type {Electron.Rectangle | null} */
-let overlayBoundsBeforeChatgpt = null;
+let chatgptZoom = 1;
+/** @type {ReturnType<typeof setTimeout>[]} */
+let zoomApplyTimers = [];
 /** @type {{ x: number, y: number, width: number, height: number } | null} */
 let lastChatgptGuestBounds = null;
 /** @type {ReturnType<typeof setTimeout> | null} */
@@ -707,14 +948,46 @@ function writeChatgptState(patch) {
   }
 }
 
-function clampToDisplay(bounds) {
-  const display = screen.getDisplayMatching(bounds);
-  const wa = display.workArea;
-  const width = Math.min(Math.max(Math.round(bounds.width), 720), wa.width);
-  const height = Math.min(Math.max(Math.round(bounds.height), 560), wa.height);
-  const x = Math.min(Math.max(Math.round(bounds.x), wa.x), wa.x + wa.width - width);
-  const y = Math.min(Math.max(Math.round(bounds.y), wa.y), wa.y + wa.height - height);
-  return { x, y, width, height };
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 2;
+const ZOOM_STEP = 0.1;
+
+function clampZoom(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 1;
+  return Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, n)) * 100) / 100;
+}
+
+function loadSavedZoom() {
+  const fromChat = readChatgptState().zoom;
+  const fromWindow = readWindowState()?.zoom;
+  chatgptZoom = clampZoom(fromChat ?? fromWindow);
+  return chatgptZoom;
+}
+
+function applyChatgptZoom() {
+  const apply = () => {
+    if (!chatgptView) return;
+    try {
+      chatgptView.webContents.setZoomFactor(chatgptZoom);
+    } catch {
+      // ignore
+    }
+  };
+  apply();
+  // Chromium restores per-origin zoom after load and overwrites an early set.
+  for (const t of zoomApplyTimers) clearTimeout(t);
+  zoomApplyTimers = [0, 50, 150, 400].map((ms) => setTimeout(apply, ms));
+  return chatgptZoom;
+}
+
+function setChatgptZoom(next) {
+  chatgptZoom = clampZoom(next);
+  applyChatgptZoom();
+  writeChatgptState({ zoom: chatgptZoom });
+  const prev = readWindowState() || {};
+  writeWindowState({ ...prev, zoom: chatgptZoom });
+  return chatgptZoom;
 }
 
 function chatgptHistory(wc) {
@@ -797,11 +1070,12 @@ function ensureChatgptView() {
     log("WebContentsView is not available in this Electron build");
     mainWindow.webContents.send(
       "chatgpt-error",
-      "This desktop build cannot embed ChatGPT. Update Interview Coach and try again."
+      "This desktop build cannot embed ChatGPT. Update Interview Copilot and try again."
     );
     return null;
   }
 
+  loadSavedZoom();
   chatgptView = new WebContentsView({
     webPreferences: {
       partition: CHATGPT_PARTITION,
@@ -809,6 +1083,7 @@ function ensureChatgptView() {
       nodeIntegration: false,
       sandbox: true,
       backgroundThrottling: false,
+      zoomFactor: chatgptZoom,
     },
   });
   // Default WebContentsView fill is opaque white, which blocks the overlay
@@ -824,11 +1099,13 @@ function ensureChatgptView() {
   wc.on("did-navigate", (_e, url) => {
     if (shouldRememberChatgptUrl(url)) writeChatgptState({ lastUrl: url });
     syncStealthForGuestUrl(url);
+    applyChatgptZoom();
     sendChatgptNav();
   });
   wc.on("did-navigate-in-page", (_e, url) => {
     if (shouldRememberChatgptUrl(url)) writeChatgptState({ lastUrl: url });
     syncStealthForGuestUrl(url);
+    applyChatgptZoom();
     sendChatgptNav();
   });
   wc.on("did-redirect-navigation", (_e, url) => {
@@ -836,11 +1113,13 @@ function ensureChatgptView() {
   });
   wc.on("did-start-loading", sendChatgptNav);
   wc.on("did-stop-loading", () => {
+    applyChatgptZoom();
     sendChatgptNav();
     // Windows packaged runs often exit before Chromium's periodic cookie
     // write; flush after each load so ChatGPT login survives the next launch.
     chatgptSession().cookies.flushStore().catch(() => {});
   });
+  wc.on("dom-ready", () => applyChatgptZoom());
   wc.on("page-title-updated", sendChatgptNav);
   wc.on("did-fail-load", (_e, code, desc, _url, isMainFrame) => {
     if (!isMainFrame || code === -3) return;
@@ -848,10 +1127,11 @@ function ensureChatgptView() {
     sendChatgptNav();
   });
 
-  const savedUrl = readChatgptState().lastUrl;
+  const saved = readChatgptState();
+  wc.on("did-finish-load", () => applyChatgptZoom());
   wc.loadURL(
-    typeof savedUrl === "string" && shouldRememberChatgptUrl(savedUrl)
-      ? savedUrl
+    typeof saved.lastUrl === "string" && shouldRememberChatgptUrl(saved.lastUrl)
+      ? saved.lastUrl
       : CHATGPT_HOME
   );
   mainWindow.contentView.addChildView(chatgptView);
@@ -865,22 +1145,12 @@ function showChatgpt() {
     clearTimeout(chatgptLeaveTimer);
     chatgptLeaveTimer = null;
   }
-  if (!chatgptVisible) {
-    overlayBoundsBeforeChatgpt = mainWindow.getBounds();
-    mainWindow.setMinimumSize(720, 560);
-    applyWindowOpacity();
-    const saved = readChatgptState().bounds;
-    if (saved && typeof saved.width === "number") {
-      mainWindow.setBounds(clampToDisplay(saved));
-    } else {
-      const b = mainWindow.getBounds();
-      mainWindow.setSize(Math.max(b.width, 1100), Math.max(b.height, 760));
-    }
-  }
+  applyWindowOpacity();
   ensureChatgptView();
   if (chatgptView) {
     setChatgptVisible(true);
     applyChatgptBounds();
+    applyChatgptZoom();
     sendChatgptNav();
   }
   chatgptVisible = true;
@@ -888,15 +1158,7 @@ function showChatgpt() {
 
 function hideChatgpt() {
   if (!chatgptVisible) return;
-  if (mainWindow) {
-    writeChatgptState({ bounds: mainWindow.getBounds() });
-    if (overlayBoundsBeforeChatgpt) {
-      mainWindow.setMinimumSize(300, 380);
-      mainWindow.setBounds(overlayBoundsBeforeChatgpt);
-      overlayBoundsBeforeChatgpt = null;
-    }
-    applyWindowOpacity();
-  }
+  applyWindowOpacity();
   if (chatgptView) setChatgptVisible(false);
   chatgptVisible = false;
   applyStealth(stealthEnabled);
@@ -932,11 +1194,131 @@ ipcMain.handle("chatgpt:forward", () => {
   const history = chatgptView?.webContents.navigationHistory;
   if (history?.canGoForward()) history.goForward();
 });
+ipcMain.handle("chatgpt:zoom-in", () => setChatgptZoom(chatgptZoom + ZOOM_STEP));
+ipcMain.handle("chatgpt:zoom-out", () => setChatgptZoom(chatgptZoom - ZOOM_STEP));
+ipcMain.handle("chatgpt:get-zoom", () => {
+  if (!chatgptView) loadSavedZoom();
+  return applyChatgptZoom();
+});
+
 ipcMain.handle("chatgpt:clear-session", async () => {
   await chatgptSession().clearStorageData();
   await chatgptSession().cookies.flushStore();
   writeChatgptState({ lastUrl: CHATGPT_HOME });
   await chatgptView?.webContents.loadURL(CHATGPT_HOME);
+});
+
+/** Fill ChatGPT's composer and send. Runs inside the guest page, no closures. */
+async function fillChatgptComposer(text) {
+  const composerSelectors = [
+    "#prompt-textarea",
+    '[data-testid="prompt-textarea"]',
+    '[contenteditable="true"][data-lexical-editor="true"]',
+    "div.ProseMirror[contenteditable='true']",
+    '[contenteditable="true"][role="textbox"]',
+  ];
+  const sendSelectors = [
+    'button[data-testid="send-button"]',
+    "#composer-submit-button",
+    'button[aria-label="Send prompt"]',
+    'button[aria-label="Send message"]',
+  ];
+
+  function isVisible(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return (
+      r.width > 0 &&
+      r.height > 0 &&
+      style.visibility !== "hidden" &&
+      style.display !== "none"
+    );
+  }
+
+  function pick(selectors) {
+    for (const sel of selectors) {
+      for (const el of document.querySelectorAll(sel)) {
+        if (isVisible(el)) return el;
+      }
+    }
+    return null;
+  }
+
+  const composer = pick(composerSelectors);
+  if (!composer) {
+    return { ok: false, error: "ChatGPT composer not found. Open a chat first." };
+  }
+
+  composer.focus();
+  composer.click();
+
+  const isField = composer.tagName === "TEXTAREA" || composer.tagName === "INPUT";
+  if (isField) {
+    const proto =
+      composer.tagName === "TEXTAREA"
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, "value");
+    if (desc && desc.set) desc.set.call(composer, text);
+    else composer.value = text;
+    composer.dispatchEvent(new Event("input", { bubbles: true }));
+    composer.dispatchEvent(new Event("change", { bubbles: true }));
+  } else {
+    const sel = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(composer);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const inserted = document.execCommand("insertText", false, text);
+    if (!inserted) {
+      const dt = new DataTransfer();
+      dt.setData("text/plain", text);
+      composer.dispatchEvent(
+        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt })
+      );
+    }
+  }
+
+  for (let i = 0; i < 25; i++) {
+    const send = pick(sendSelectors);
+    if (send && !send.disabled && send.getAttribute("aria-disabled") !== "true") {
+      send.click();
+      return { ok: true };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+
+  composer.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Enter",
+      code: "Enter",
+      keyCode: 13,
+      which: 13,
+      bubbles: true,
+    })
+  );
+  return { ok: true };
+}
+
+ipcMain.handle("chatgpt:submit", async (_e, raw) => {
+  const text = String(raw ?? "");
+  if (!text.trim()) return { ok: false, error: "Nothing to send." };
+  if (!chatgptView) return { ok: false, error: "ChatGPT is not open." };
+  try {
+    const result = await chatgptView.webContents.executeJavaScript(
+      `(${fillChatgptComposer})(${JSON.stringify(text)})`,
+      true
+    );
+    if (result && typeof result === "object") return result;
+    return { ok: true };
+  } catch (err) {
+    log("chatgpt submit failed:", err instanceof Error ? err.message : String(err));
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Could not send to ChatGPT.",
+    };
+  }
 });
 
 function jobTrackSessionPath() {
@@ -991,6 +1373,7 @@ app.whenReady().then(async () => {
     process.resourcesPath
   );
   configureChatgptSession();
+  loadSavedZoom();
   try {
     await ensureServer();
   } catch (err) {
@@ -1030,6 +1413,7 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   flushingQuit = true;
   void (async () => {
+    persistWindowBounds();
     try {
       if (typeof session.defaultSession.flushStorageData === "function") {
         session.defaultSession.flushStorageData();
@@ -1050,6 +1434,8 @@ app.on("before-quit", (event) => {
 });
 
 app.on("will-quit", () => {
+  destroyTray();
+  stopStealthRefresh();
   globalShortcut.unregisterAll();
   stopCaptions();
   if (serverProcess && !serverProcess.killed) serverProcess.kill();
