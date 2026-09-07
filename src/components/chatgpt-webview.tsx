@@ -22,21 +22,24 @@ import { useDeepgram } from "@/hooks/use-deepgram";
 import { useOpenAiTranscription, type CaptureSource } from "@/hooks/use-openai-transcription";
 import { useSettings } from "@/hooks/use-settings";
 import {
+  collapseRepeatedText,
   joinTokens,
+  remainingAfterConsumed,
   sentenceKey,
-  stripLeadingOverlap,
   tokenize,
 } from "@/lib/caption-reconciler";
 
 type CaptureChoice = CaptureSource | "livecaption";
 
 function onlyNewCaption(text: string, consumedKey: string): string {
-  const trimmed = text.trim();
+  const trimmed = collapseRepeatedText(text.trim());
   if (!trimmed) return "";
   if (!consumedKey) return trimmed;
-  const key = sentenceKey(trimmed);
-  if (!key || consumedKey.includes(key)) return "";
-  return joinTokens(stripLeadingOverlap(consumedKey.split(" "), tokenize(trimmed))).trim();
+  const remaining = remainingAfterConsumed(
+    consumedKey.split(" ").filter(Boolean),
+    tokenize(trimmed)
+  );
+  return collapseRepeatedText(joinTokens(remaining).trim());
 }
 
 const RIGHT_WIDTH_KEY = "interview-copilot.chatgpt-right-width";
@@ -89,11 +92,15 @@ export function ChatGptWebview() {
     const fresh = onlyNewCaption(text, consumedKeyRef.current);
     if (isFinal) {
       if (!fresh) return;
-      committedRef.current = [committedRef.current, fresh].filter(Boolean).join(" ");
+      committedRef.current = collapseRepeatedText(
+        [committedRef.current, fresh].filter(Boolean).join(" ")
+      );
       setDraft(committedRef.current);
       return;
     }
-    setDraft([committedRef.current, fresh].filter(Boolean).join(" "));
+    setDraft(
+      collapseRepeatedText([committedRef.current, fresh].filter(Boolean).join(" "))
+    );
   }, []);
 
   const liveCaptions = useLiveCaptions({
@@ -204,6 +211,10 @@ export function ChatGptWebview() {
       consumedKeyRef.current = consumedKeyRef.current
         ? `${consumedKeyRef.current} ${key}`
         : key;
+      const parts = consumedKeyRef.current.split(" ").filter(Boolean);
+      if (parts.length > 400) {
+        consumedKeyRef.current = parts.slice(-400).join(" ");
+      }
     }
     committedRef.current = "";
     setDraft("");
@@ -211,7 +222,6 @@ export function ChatGptWebview() {
 
   const clearDraft = () => {
     markConsumedAndClear(draft);
-    toast.success("Caption cleared");
   };
 
   const changeZoom = async (direction: "in" | "out") => {

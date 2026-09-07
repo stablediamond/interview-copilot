@@ -85,3 +85,36 @@ test("checkpoint drops a replay of the same rolling window after Clear", () => {
   assert.deepEqual(replay.finals, []);
   assert.equal(replay.interim, "");
 });
+
+test("checkpoint drops a concatenated Live Captions replay and keeps only new words", () => {
+  const reconciler = new CaptionReconciler();
+  const phrase =
+    "It's just our thought process is that when we do the, it's the the main term, it's a peer review";
+  reconciler.push(phrase);
+  reconciler.checkpoint(phrase);
+  const next = reconciler.push(
+    `${phrase} ${phrase} and so it's the basic fundamentals`
+  );
+  assert.deepEqual(next.finals, []);
+  assert.equal(next.interim, "and so it's the basic fundamentals");
+});
+
+test("push collapses overlapping caption blocks from the Live Captions bridge", () => {
+  const reconciler = new CaptionReconciler();
+  const phrase =
+    "It's just our thought process is that when we do the main term it's a peer review";
+  const { finals, interim } = reconciler.push(`${phrase} ${phrase} and so`);
+  const text = [...finals, interim].join(" ");
+  const matches = text.match(/peer review/gi) ?? [];
+  assert.equal(matches.length, 1);
+  assert.match(text, /and so/);
+});
+
+test("collapseRepeatedText collapses a long immediately repeated caption", () => {
+  const phrase =
+    "It's just our thought process is that when we do the main term it's a peer review";
+  assert.equal(
+    collapseRepeatedText(`${phrase} ${phrase} and so`),
+    `${phrase} and so`
+  );
+});

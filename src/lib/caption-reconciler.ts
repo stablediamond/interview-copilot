@@ -92,6 +92,52 @@ export function stripLeadingOverlap(
   return textTokens;
 }
 
+/**
+ * Drop every already-heard prefix from a Live Captions snapshot.
+ * One overlap pass is not enough: the PowerShell bridge often concatenates a
+ * finalized block with a live block that repeats it, so after Clear/Answer the
+ * same sentence arrives twice (`phrase phrase and then new words`).
+ */
+export function remainingAfterConsumed(
+  consumedNorm: readonly string[],
+  snapTokens: string[],
+  containPrefixMin = 8
+): string[] {
+  if (consumedNorm.length === 0 || snapTokens.length === 0) return snapTokens;
+  const consumedKey = consumedNorm.filter(Boolean).join(" ");
+  if (!consumedKey) return snapTokens;
+
+  let remaining = snapTokens;
+  for (let guard = 0; guard < 8; guard++) {
+    const remKey = remaining.map(normWord).filter(Boolean).join(" ");
+    if (!remKey || consumedKey.includes(remKey)) return [];
+    const next = stripLeadingOverlap(consumedNorm, remaining);
+    if (next.length === remaining.length) break;
+    remaining = next;
+  }
+
+  const remKey = remaining.map(normWord).filter(Boolean).join(" ");
+  if (!remKey || consumedKey.includes(remKey)) return [];
+
+  if (containPrefixMin > 0 && containPrefixMin < Infinity) {
+    const remNorm = remaining.map(normWord);
+    let cut = 0;
+    const max = remNorm.length;
+    for (let i = max; i >= containPrefixMin; i--) {
+      const prefix = remNorm.slice(0, i).filter(Boolean).join(" ");
+      if (prefix && consumedKey.includes(prefix)) {
+        cut = i;
+        break;
+      }
+    }
+    remaining = remaining.slice(cut);
+  }
+
+  const leftover = remaining.map(normWord).filter(Boolean).join(" ");
+  if (!leftover || consumedKey.includes(leftover)) return [];
+  return remaining;
+}
+
 // Tokens Live Captions may still revise — kept in the live region, never
 // committed until more arrives after them.
 const LIVE_MARGIN = 8;
@@ -139,7 +185,11 @@ export class CaptionReconciler {
       if (this.#committedTail.length > TAIL_MAX) {
         this.#committedTail = this.#committedTail.slice(-TAIL_MAX);
       }
-      this.#consumedNorm = tokens.map(normWord).filter(Boolean);
+      const nextConsumed = tokens.map(normWord).filter(Boolean);
+      this.#consumedNorm = [...this.#consumedNorm, ...nextConsumed];
+      if (this.#consumedNorm.length > 400) {
+        this.#consumedNorm = this.#consumedNorm.slice(-400);
+      }
       const key = sentenceKey(pieces.join(" "));
       if (key) this.#seen.add(key);
     }
@@ -147,7 +197,7 @@ export class CaptionReconciler {
   }
 
   push(snapshot: string): { finals: string[]; interim: string } {
-    const snap = snapshot.replace(/\s+/g, " ").trim();
+    const snap = collapseRepeatedText(snapshot.replace(/\s+/g, " ").trim());
     if (!snap) return { finals: [], interim: this.#live };
     this.#lastSnap = snap;
 
@@ -217,21 +267,21 @@ export class CaptionReconciler {
   // Strip the part of the snapshot that overlaps the committed tail and return
   // the remaining (live) tokens.
   #alignLive(snapTokens: string[]): string[] {
-    const fromConsumed =
-      this.#consumedNorm.length > 0
-        ? stripLeadingOverlap(this.#consumedNorm, snapTokens)
-        : snapTokens;
-    if (fromConsumed.length < snapTokens.length) return fromConsumed;
-    return stripLeadingOverlap(this.#committedTail.map(normWord), snapTokens);
+    let remaining = snapTokens;
+    if (this.#consumedNorm.length > 0) {
+      remaining = remainingAfterConsumed(this.#consumedNorm, remaining);
+      if (remaining.length === 0) return remaining;
+    }
+    return remainingAfterConsumed(
+      this.#committedTail.map(normWord).filter(Boolean),
+      remaining,
+      Infinity
+    );
   }
 
   #isAlreadyConsumed(snapTokens: string[]): boolean {
     if (this.#consumedNorm.length === 0 || snapTokens.length === 0) return false;
-    const snapKey = snapTokens.map(normWord).filter(Boolean).join(" ");
-    if (!snapKey) return false;
-    const consumedKey = this.#consumedNorm.filter(Boolean).join(" ");
-    if (consumedKey.includes(snapKey)) return true;
-    return stripLeadingOverlap(this.#consumedNorm, snapTokens).length === 0;
+    return remainingAfterConsumed(this.#consumedNorm, snapTokens).length === 0;
   }
 }
 
@@ -249,7 +299,7 @@ export function collapseRepeatedText(text: string): string {
   const norm = tokens.map(normWord);
   const out: string[] = [];
   const outNorm: string[] = [];
-  const MAX_PHRASE = 12;
+  const MAX_PHRASE = 48;
 
   let i = 0;
   while (i < tokens.length) {

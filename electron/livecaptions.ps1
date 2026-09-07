@@ -35,7 +35,30 @@ function Get-CaptionText {
       if ($t) { $parts.Add($t) }
     }
     if ($parts.Count -eq 0) { return $null }
-    return ($parts -join ' ')
+    # Live Captions often exposes a finalized block plus a live block that
+    # repeats it. Joining with a space doubled the caption after Clear/Answer.
+    $acc = $parts[0]
+    for ($i = 1; $i -lt $parts.Count; $i++) {
+      $next = $parts[$i]
+      if (-not $next) { continue }
+      if ($acc.IndexOf($next) -ge 0) { continue }
+      if ($next.IndexOf($acc) -ge 0) { $acc = $next; continue }
+      $max = [Math]::Min($acc.Length, $next.Length)
+      $overlap = 0
+      $minOverlap = [Math]::Min(16, $max)
+      for ($n = $max; $n -ge $minOverlap; $n--) {
+        if ($next.StartsWith($acc.Substring($acc.Length - $n))) {
+          $overlap = $n
+          break
+        }
+      }
+      if ($overlap -gt 0) {
+        $acc = $acc + $next.Substring($overlap)
+      } else {
+        $acc = $acc + ' ' + $next
+      }
+    }
+    return $acc
   } catch {
     return $null
   }
