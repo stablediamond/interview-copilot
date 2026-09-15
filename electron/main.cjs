@@ -1365,8 +1365,12 @@ ipcMain.handle("chatgpt:submit", async (_e, raw) => {
   const text = String(raw ?? "");
   if (!text.trim()) return { ok: false, error: "Nothing to send." };
   if (!chatgptView) return { ok: false, error: "ChatGPT is not open." };
-  const previousText = clipboard.readText();
-  const previousHtml = clipboard.readHTML();
+  let previousText = "";
+  try {
+    previousText = clipboard.readText();
+  } catch {
+    previousText = "";
+  }
   try {
     const focused = await chatgptView.webContents.executeJavaScript(
       `(${focusChatgptComposer})()`,
@@ -1380,8 +1384,7 @@ ipcMain.handle("chatgpt:submit", async (_e, raw) => {
         }
       );
     }
-    clipboard.clear();
-    clipboard.write({ text });
+    clipboard.writeText(text);
     pastePlainIntoChatgpt();
     const needle = text.trim().slice(0, 48);
     const result = await chatgptView.webContents.executeJavaScript(
@@ -1398,10 +1401,7 @@ ipcMain.handle("chatgpt:submit", async (_e, raw) => {
     };
   } finally {
     try {
-      clipboard.write({
-        text: previousText,
-        ...(previousHtml ? { html: previousHtml } : {}),
-      });
+      clipboard.writeText(previousText);
     } catch {
       // ignore
     }
