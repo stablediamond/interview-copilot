@@ -44,6 +44,12 @@ const nextConfig = {
       "./prisma/migrations/**",
     ],
   },
+  async redirects() {
+    return [
+      { source: "/setup", destination: "/calendar", permanent: false },
+      { source: "/chatgpt", destination: "/session", permanent: false },
+    ];
+  },
 };
 
 export default nextConfig;

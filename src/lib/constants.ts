@@ -5,6 +5,7 @@ import type {
   InterviewStage,
   QuestionType,
 } from "./schemas";
+import { DEFAULT_INTERVIEW_PROMPTS } from "./interview-prompts";
 
 // Labels for the universal, role-agnostic categories. Role-specific categories
 // (chosen per candidate at generation time) won't be in this map — use
@@ -76,9 +77,8 @@ export const CONFIDENCE_LABELS: Record<Confidence, string> = {
 export const CHATGPT_URL = "https://chatgpt.com";
 
 export const NAV_ITEMS = [
-  { href: "/setup", label: "Setup" },
+  { href: "/calendar", label: "Calendar" },
   { href: "/session", label: "Session" },
-  { href: "/chatgpt", label: "ChatGPT" },
   { href: "/stories", label: "Stories" },
   { href: "/history", label: "History" },
   { href: "/settings", label: "Settings" },
@@ -117,6 +117,11 @@ export interface AppSettings {
   answerFontSize: AnswerFontSize;
   /** Language the generated answer is written in. "zh" adds per-character pinyin. */
   answerLanguage: AnswerLanguage;
+  /**
+   * Default ChatGPT interview brief. Edited on Settings. Not the Job Track
+   * candidate resume-generation prompt.
+   */
+  defaultInterviewPrompts: string;
 }
 
 export type AnswerFontSize = "sm" | "base" | "lg" | "xl";
@@ -144,6 +149,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   stealth: true,
   answerFontSize: "base",
   answerLanguage: "en",
+  defaultInterviewPrompts: DEFAULT_INTERVIEW_PROMPTS,
 };
 
 export const ANSWER_LANGUAGES: { value: AnswerLanguage; label: string }[] = [

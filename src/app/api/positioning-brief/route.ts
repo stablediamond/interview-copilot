@@ -49,13 +49,13 @@ export async function POST(request: Request) {
 
     if (!candidate) {
       return jsonError(
-        "Analyze the candidate's resume first (on Setup) before building a positioning brief.",
+        "Analyze the candidate's resume first before building a positioning brief.",
         422
       );
     }
     if (!job) {
       return jsonError(
-        "Analyze the job description first (on Setup) before building a positioning brief.",
+        "Analyze the job description first before building a positioning brief.",
         422
       );
     }

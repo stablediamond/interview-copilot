@@ -24,9 +24,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { OpenAiConfigCard } from "@/components/openai-config-card";
+import { Textarea } from "@/components/ui/textarea";
 import { apiFetch } from "@/lib/client";
 import { getElectronAPI } from "@/lib/electron";
 import { useSettings } from "@/hooks/use-settings";
+import { DEFAULT_INTERVIEW_PROMPTS } from "@/lib/interview-prompts";
 import {
   ANSWER_MODE_LABELS,
   ANSWER_FONT_SIZE_LABELS,
@@ -92,6 +94,38 @@ export default function SettingsPage() {
 
       {/* OpenAI key + model management */}
       <OpenAiConfigCard onChanged={refreshConfig} />
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Default interview prompts</CardTitle>
+          <CardDescription>
+            Used when you Build brief on Session. This is not the Job Track
+            resume-generation prompt saved on the candidate.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Textarea
+            id="default-interview-prompts"
+            value={settings.defaultInterviewPrompts}
+            onChange={(e) =>
+              update({ defaultInterviewPrompts: e.target.value })
+            }
+            disabled={!hydrated}
+            className="min-h-[240px] whitespace-pre-wrap text-sm leading-relaxed"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!hydrated}
+            onClick={() =>
+              update({ defaultInterviewPrompts: DEFAULT_INTERVIEW_PROMPTS })
+            }
+          >
+            Reset to default
+          </Button>
+        </CardContent>
+      </Card>
 
       {/* Deepgram (optional) */}
       <Card>

@@ -121,7 +121,7 @@ export default function StoriesPage() {
 
   const handleGenerate = async () => {
     if (!selectedCandidate) {
-      toast.error("Select a candidate profile first (analyze a resume on Setup).");
+      toast.error("Select a candidate profile first.");
       return;
     }
     setGenerating(true);
@@ -343,7 +343,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
         <div>
           <p className="font-medium">No stories yet</p>
           <p className="text-sm text-muted-foreground">
-            Create one manually, or analyze a resume on Setup and generate the bank.
+            Create one manually, or generate a bank from a saved candidate profile.
           </p>
         </div>
         <Button onClick={onCreate}>

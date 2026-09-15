@@ -1147,13 +1147,19 @@ function showChatgpt() {
   }
   applyWindowOpacity();
   ensureChatgptView();
+  chatgptVisible = true;
   if (chatgptView) {
-    setChatgptVisible(true);
-    applyChatgptBounds();
+    // Stay hidden until the renderer sends host bounds. Showing immediately
+    // fills the whole window and steals clicks from Edit / Build brief.
+    if (lastChatgptGuestBounds) {
+      applyChatgptBounds();
+      setChatgptVisible(true);
+    } else {
+      setChatgptVisible(false);
+    }
     applyChatgptZoom();
     sendChatgptNav();
   }
-  chatgptVisible = true;
 }
 
 function hideChatgpt() {
@@ -1175,7 +1181,9 @@ ipcMain.handle("chatgpt:leave", () => {
 ipcMain.on("chatgpt:layout", (_e, bounds) => {
   if (!bounds || typeof bounds.width !== "number") return;
   lastChatgptGuestBounds = bounds;
+  if (!chatgptVisible || !chatgptView) return;
   applyChatgptBounds();
+  setChatgptVisible(true);
 });
 ipcMain.handle("chatgpt:reload", () => chatgptView?.webContents.reload());
 ipcMain.handle("chatgpt:home", () => chatgptView?.webContents.loadURL(CHATGPT_HOME));

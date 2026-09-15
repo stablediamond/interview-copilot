@@ -84,6 +84,18 @@ export function getStoredEmail(): string | null {
   return readLocalSession()?.email ?? null;
 }
 
+export function getStoredPrivilege(): string | null {
+  return readLocalSession()?.privilege ?? null;
+}
+
+/** Electron stores the session on disk; localStorage can lag behind. */
+export async function resolveStoredPrivilege(): Promise<string> {
+  const session = await loadSession();
+  return (session?.privilege ?? readLocalSession()?.privilege ?? "")
+    .trim()
+    .toLowerCase();
+}
+
 export function hasSession(): boolean {
   return Boolean(readLocalSession());
 }

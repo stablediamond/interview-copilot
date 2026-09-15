@@ -1,26 +1,21 @@
 import Link from "next/link";
-import { ArrowRight, BookText, History, MessageSquare, Mic, Settings, Sparkles } from "lucide-react";
+import { ArrowRight, BookText, CalendarDays, History, Mic, Settings } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
 const cards = [
   {
-    href: "/setup",
-    title: "Setup",
-    description: "Add your resume and the job description, then extract structured profiles.",
-    icon: Sparkles,
+    href: "/calendar",
+    title: "Calendar",
+    description: "See your Job Track interview calendar and jump into a live session.",
+    icon: CalendarDays,
   },
   {
     href: "/session",
     title: "Session",
-    description: "Run a live session with audio or pasted captions and generate spoken answers.",
+    description:
+      "Start from a calendar event, keep ChatGPT in view, and generate spoken answers from captions or a specific question.",
     icon: Mic,
-  },
-  {
-    href: "/chatgpt",
-    title: "ChatGPT",
-    description: "Open chatgpt.com in an embedded webview. Your ChatGPT login is saved on this device.",
-    icon: MessageSquare,
   },
   {
     href: "/stories",
@@ -54,8 +49,8 @@ export default function HomePage() {
         </p>
         <div className="flex flex-wrap gap-3 pt-2">
           <Button asChild>
-            <Link href="/setup">
-              Start with setup <ArrowRight className="h-4 w-4" />
+            <Link href="/calendar">
+              Open calendar <ArrowRight className="h-4 w-4" />
             </Link>
           </Button>
           <Button asChild variant="outline">

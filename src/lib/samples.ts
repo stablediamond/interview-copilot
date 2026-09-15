@@ -1,7 +1,6 @@
 /**
  * Sample seed data for local testing only. Clearly marked as sample data so it
- * is never confused with real candidate information. Used by the /setup page
- * "Load sample" button and by prisma/seed.ts.
+ * is never confused with real candidate information. Used by prisma/seed.ts.
  */
 
 export const SAMPLE_RESUME = `Jordan Avery
