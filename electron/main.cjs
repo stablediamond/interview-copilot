@@ -15,6 +15,7 @@ const {
   Tray,
   Menu,
   nativeImage,
+  clipboard,
 } = require("electron");
 const path = require("path");
 const net = require("net");
@@ -1216,20 +1217,14 @@ ipcMain.handle("chatgpt:clear-session", async () => {
   await chatgptView?.webContents.loadURL(CHATGPT_HOME);
 });
 
-/** Fill ChatGPT's composer and send. Runs inside the guest page, no closures. */
-async function fillChatgptComposer(text) {
+/** Focus ChatGPT's composer and select its contents. Runs in the guest page. */
+function focusChatgptComposer() {
   const composerSelectors = [
     "#prompt-textarea",
     '[data-testid="prompt-textarea"]',
     '[contenteditable="true"][data-lexical-editor="true"]',
     "div.ProseMirror[contenteditable='true']",
     '[contenteditable="true"][role="textbox"]',
-  ];
-  const sendSelectors = [
-    'button[data-testid="send-button"]',
-    "#composer-submit-button",
-    'button[aria-label="Send prompt"]',
-    'button[aria-label="Send message"]',
   ];
 
   function isVisible(el) {
@@ -1260,35 +1255,65 @@ async function fillChatgptComposer(text) {
 
   composer.focus();
   composer.click();
-
-  const isField = composer.tagName === "TEXTAREA" || composer.tagName === "INPUT";
-  if (isField) {
-    const proto =
-      composer.tagName === "TEXTAREA"
-        ? HTMLTextAreaElement.prototype
-        : HTMLInputElement.prototype;
-    const desc = Object.getOwnPropertyDescriptor(proto, "value");
-    if (desc && desc.set) desc.set.call(composer, text);
-    else composer.value = text;
-    composer.dispatchEvent(new Event("input", { bubbles: true }));
-    composer.dispatchEvent(new Event("change", { bubbles: true }));
+  if (typeof composer.select === "function") {
+    composer.select();
   } else {
     const sel = window.getSelection();
     const range = document.createRange();
     range.selectNodeContents(composer);
     sel.removeAllRanges();
     sel.addRange(range);
-    const inserted = document.execCommand("insertText", false, text);
-    if (!inserted) {
-      const dt = new DataTransfer();
-      dt.setData("text/plain", text);
-      composer.dispatchEvent(
-        new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt })
-      );
-    }
+  }
+  return { ok: true };
+}
+
+/** Click Send once the pasted brief is in the composer. Runs in the guest page. */
+async function clickChatgptSend(needle) {
+  const composerSelectors = [
+    "#prompt-textarea",
+    '[data-testid="prompt-textarea"]',
+    '[contenteditable="true"][data-lexical-editor="true"]',
+    "div.ProseMirror[contenteditable='true']",
+    '[contenteditable="true"][role="textbox"]',
+  ];
+  const sendSelectors = [
+    'button[data-testid="send-button"]',
+    "#composer-submit-button",
+    'button[aria-label="Send prompt"]',
+    'button[aria-label="Send message"]',
+  ];
+  const want = String(needle || "").trim();
+
+  function isVisible(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return (
+      r.width > 0 &&
+      r.height > 0 &&
+      style.visibility !== "hidden" &&
+      style.display !== "none"
+    );
   }
 
-  for (let i = 0; i < 25; i++) {
+  function pick(selectors) {
+    for (const sel of selectors) {
+      for (const el of document.querySelectorAll(sel)) {
+        if (isVisible(el)) return el;
+      }
+    }
+    return null;
+  }
+
+  for (let i = 0; i < 40; i++) {
+    const composer = pick(composerSelectors);
+    const value = composer
+      ? String(composer.innerText || composer.value || "")
+      : "";
+    if (want && !value.includes(want)) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      continue;
+    }
     const send = pick(sendSelectors);
     if (send && !send.disabled && send.getAttribute("aria-disabled") !== "true") {
       send.click();
@@ -1297,25 +1322,57 @@ async function fillChatgptComposer(text) {
     await new Promise((resolve) => setTimeout(resolve, 40));
   }
 
-  composer.dispatchEvent(
-    new KeyboardEvent("keydown", {
-      key: "Enter",
-      code: "Enter",
-      keyCode: 13,
-      which: 13,
-      bubbles: true,
-    })
-  );
+  const composer = pick(composerSelectors);
+  if (composer) {
+    composer.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+      })
+    );
+  }
   return { ok: true };
+}
+
+function pastePlainIntoChatgpt() {
+  const wc = chatgptView.webContents;
+  wc.focus();
+  if (typeof wc.pasteAndMatchStyle === "function") {
+    wc.pasteAndMatchStyle();
+    return;
+  }
+  const control = process.platform === "darwin" ? "cmd" : "control";
+  const modifiers = [control, "shift"];
+  wc.sendInputEvent({ type: "keyDown", keyCode: "V", modifiers });
+  wc.sendInputEvent({ type: "keyUp", keyCode: "V", modifiers });
 }
 
 ipcMain.handle("chatgpt:submit", async (_e, raw) => {
   const text = String(raw ?? "");
   if (!text.trim()) return { ok: false, error: "Nothing to send." };
   if (!chatgptView) return { ok: false, error: "ChatGPT is not open." };
+  const previous = clipboard.readText();
   try {
+    const focused = await chatgptView.webContents.executeJavaScript(
+      `(${focusChatgptComposer})()`,
+      true
+    );
+    if (!focused?.ok) {
+      return (
+        focused || {
+          ok: false,
+          error: "ChatGPT composer not found. Open a chat first.",
+        }
+      );
+    }
+    clipboard.writeText(text);
+    pastePlainIntoChatgpt();
+    const needle = text.trim().slice(0, 48);
     const result = await chatgptView.webContents.executeJavaScript(
-      `(${fillChatgptComposer})(${JSON.stringify(text)})`,
+      `(${clickChatgptSend})(${JSON.stringify(needle)})`,
       true
     );
     if (result && typeof result === "object") return result;
@@ -1326,6 +1383,12 @@ ipcMain.handle("chatgpt:submit", async (_e, raw) => {
       ok: false,
       error: err instanceof Error ? err.message : "Could not send to ChatGPT.",
     };
+  } finally {
+    try {
+      clipboard.writeText(previous);
+    } catch {
+      // ignore
+    }
   }
 });
 
