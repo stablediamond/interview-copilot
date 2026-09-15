@@ -1337,24 +1337,36 @@ async function clickChatgptSend(needle) {
   return { ok: true };
 }
 
+function sendChatgptKey(type, keyCode, modifiers) {
+  chatgptView.webContents.sendInputEvent({
+    type,
+    keyCode,
+    modifiers,
+  });
+}
+
+/** Same as the user's Ctrl+Shift+V / Cmd+Shift+V (plain text, not a file upload). */
 function pastePlainIntoChatgpt() {
   const wc = chatgptView.webContents;
   wc.focus();
-  if (typeof wc.pasteAndMatchStyle === "function") {
-    wc.pasteAndMatchStyle();
-    return;
-  }
   const control = process.platform === "darwin" ? "cmd" : "control";
   const modifiers = [control, "shift"];
-  wc.sendInputEvent({ type: "keyDown", keyCode: "V", modifiers });
-  wc.sendInputEvent({ type: "keyUp", keyCode: "V", modifiers });
+  sendChatgptKey("keyDown", process.platform === "darwin" ? "Meta" : "Control", [
+    control,
+  ]);
+  sendChatgptKey("keyDown", "Shift", modifiers);
+  sendChatgptKey("keyDown", "V", modifiers);
+  sendChatgptKey("keyUp", "V", modifiers);
+  sendChatgptKey("keyUp", "Shift", [control]);
+  sendChatgptKey("keyUp", process.platform === "darwin" ? "Meta" : "Control", []);
 }
 
 ipcMain.handle("chatgpt:submit", async (_e, raw) => {
   const text = String(raw ?? "");
   if (!text.trim()) return { ok: false, error: "Nothing to send." };
   if (!chatgptView) return { ok: false, error: "ChatGPT is not open." };
-  const previous = clipboard.readText();
+  const previousText = clipboard.readText();
+  const previousHtml = clipboard.readHTML();
   try {
     const focused = await chatgptView.webContents.executeJavaScript(
       `(${focusChatgptComposer})()`,
@@ -1368,7 +1380,8 @@ ipcMain.handle("chatgpt:submit", async (_e, raw) => {
         }
       );
     }
-    clipboard.writeText(text);
+    clipboard.clear();
+    clipboard.write({ text });
     pastePlainIntoChatgpt();
     const needle = text.trim().slice(0, 48);
     const result = await chatgptView.webContents.executeJavaScript(
@@ -1385,7 +1398,10 @@ ipcMain.handle("chatgpt:submit", async (_e, raw) => {
     };
   } finally {
     try {
-      clipboard.writeText(previous);
+      clipboard.write({
+        text: previousText,
+        ...(previousHtml ? { html: previousHtml } : {}),
+      });
     } catch {
       // ignore
     }
