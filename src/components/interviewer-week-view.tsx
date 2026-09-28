@@ -30,6 +30,8 @@ import {
   zonedDateKey,
 } from "@/lib/calendar-layout";
 
+const INITIAL_SCROLL_HOUR = 8;
+
 const hours = Array.from(
   { length: HOUR_END - HOUR_START },
   (_, i) => HOUR_START + i
@@ -45,12 +47,20 @@ export function InterviewerWeekView({
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [now, setNow] = React.useState(() => new Date());
   const [clockReady, setClockReady] = React.useState(false);
+  const calendarScrollRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     setTimeZone(detectDefaultTimeZone());
     setNow(new Date());
     setClockReady(true);
   }, []);
+
+  React.useEffect(() => {
+    if (!clockReady || !calendarScrollRef.current) return;
+    // Grid rows are wall-clock hours in the selected timezone.
+    calendarScrollRef.current.scrollTop =
+      (INITIAL_SCROLL_HOUR - HOUR_START) * HOUR_HEIGHT;
+  }, [clockReady, timeZone]);
 
   React.useEffect(() => {
     if (!clockReady) return;
@@ -146,7 +156,7 @@ export function InterviewerWeekView({
         <TimeZonePicker value={timeZone} onChange={setTimeZone} />
       </div>
 
-      <div className="max-h-[70vh] overflow-auto rounded-lg border border-border bg-card">
+      <div ref={calendarScrollRef} className="max-h-[70vh] overflow-auto rounded-lg border border-border bg-card">
         <div
           className="sticky top-0 z-20 grid border-b border-border bg-card"
           style={{
