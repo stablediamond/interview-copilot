@@ -1361,10 +1361,45 @@ function pastePlainIntoChatgpt() {
   sendChatgptKey("keyUp", process.platform === "darwin" ? "Meta" : "Control", []);
 }
 
-ipcMain.handle("chatgpt:submit", async (_e, raw) => {
+const { readChatgptAnswer, createAnswerTracker } = require("./chatgpt-answer-stream.cjs");
+let sharedAnswerActive = false;
+let chatgptSubmitActive = false;
+function streamChatgptAnswer(wc, options, baseline) {
+  sharedAnswerActive = true;
+  const track = createAnswerTracker(baseline);
+  let conversationPath = new URL(wc.getURL()).pathname;
+  if (!conversationPath.startsWith("/c/")) conversationPath = null;
+  const started = Date.now();
+  let latest = { text: "", revision: 1, done: false };
+  const emit = (update) => mainWindow?.webContents.send("chatgpt-answer", { ...options, ...update });
+  emit(latest);
+  async function tick() {
+    try {
+      if (wc.isDestroyed() || Date.now() - started > 10 * 60_000) throw new Error("Answer capture ended before completion.");
+      const url = new URL(wc.getURL());
+      if (url.hostname !== "chatgpt.com" && !url.hostname.endsWith(".chatgpt.com")) throw new Error("ChatGPT navigated away.");
+      if (conversationPath && url.pathname !== conversationPath) throw new Error("ChatGPT switched conversations before capture finished.");
+      if (!conversationPath && url.pathname.startsWith("/c/")) conversationPath = url.pathname;
+      const sample = await wc.executeJavaScript(`(${readChatgptAnswer})()`);
+      const update = track(sample);
+      if (update) { latest = update; emit(update); }
+      if (update?.done) { sharedAnswerActive = false; return; }
+      setTimeout(tick, 350);
+    } catch (error) {
+      sharedAnswerActive = false;
+      emit({ text: latest.text || "Answer capture interrupted. Retry from the GPT tab.", revision: latest.revision + 1, done: true,
+        error: error instanceof Error ? error.message : "Could not capture the GPT answer." });
+    }
+  }
+  setTimeout(tick, 350);
+}
+
+ipcMain.handle("chatgpt:submit", async (_e, raw, streamOptions) => {
+  if (sharedAnswerActive || chatgptSubmitActive) return { ok: false, error: "Wait for the current shared answer to finish before sending another prompt." };
   const text = String(raw ?? "");
   if (!text.trim()) return { ok: false, error: "Nothing to send." };
   if (!chatgptView) return { ok: false, error: "ChatGPT is not open." };
+  chatgptSubmitActive = true;
   let previousText = "";
   try {
     previousText = clipboard.readText();
@@ -1372,6 +1407,9 @@ ipcMain.handle("chatgpt:submit", async (_e, raw) => {
     previousText = "";
   }
   try {
+    const sharing = streamOptions && /^[\w-]{1,80}$/.test(streamOptions.streamId || "") && /^[\w-]{1,200}$/.test(streamOptions.eventId || "");
+    const baseline = sharing ? await chatgptView.webContents.executeJavaScript(`(${readChatgptAnswer})()`) : null;
+    if (baseline?.busy) return { ok: false, error: "Wait for ChatGPT to finish the current answer." };
     const focused = await chatgptView.webContents.executeJavaScript(
       `(${focusChatgptComposer})()`,
       true
@@ -1391,6 +1429,8 @@ ipcMain.handle("chatgpt:submit", async (_e, raw) => {
       `(${clickChatgptSend})(${JSON.stringify(needle)})`,
       true
     );
+    if (baseline) baseline.expectedPrompt = text;
+    if (result?.ok && baseline) streamChatgptAnswer(chatgptView.webContents, { streamId: streamOptions.streamId, eventId: streamOptions.eventId }, baseline);
     if (result && typeof result === "object") return result;
     return { ok: true };
   } catch (err) {
@@ -1400,6 +1440,7 @@ ipcMain.handle("chatgpt:submit", async (_e, raw) => {
       error: err instanceof Error ? err.message : "Could not send to ChatGPT.",
     };
   } finally {
+    chatgptSubmitActive = false;
     try {
       clipboard.writeText(previousText);
     } catch {

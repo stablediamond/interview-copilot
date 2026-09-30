@@ -72,7 +72,8 @@ export interface ElectronAPI {
     goBack: () => Promise<void>;
     goForward: () => Promise<void>;
     clearSession: () => Promise<void>;
-    submit: (text: string) => Promise<{ ok: boolean; error?: string }>;
+    submit: (text: string, options?: { streamId: string; eventId: string }) => Promise<{ ok: boolean; error?: string }>;
+    onAnswer: (callback: (update: { streamId: string; eventId: string; text: string; revision: number; done: boolean; error?: string }) => void) => () => void;
     zoomIn: () => Promise<number>;
     zoomOut: () => Promise<number>;
     getZoom: () => Promise<number>;

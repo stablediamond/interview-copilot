@@ -249,3 +249,10 @@ Opening Session from a calendar event now shows the Job Track room: participant 
 Positioning Brief appears above the GPT and Record & Answer workspace in the GPT tab. Sessions without a calendar event retain the standalone brief/GPT flow. If shared-session loading fails, Retry is available and the brief/GPT workspace remains usable.
 
 Deploy the accompanying Job Track bearer-token support for `/api/event-sessions/{eventId}` and ensure migration `0020_event_sessions.sql` is applied. The desktop app forwards its signed-in user's token through a local proxy; tokens are never put in URLs. Run `node scripts/test-shared-session.cjs` to check the proxy contract.
+
+
+### Live GPT answer sharing
+
+On an event Session's GPT tab, **Answer** submits the current question/caption and shares the new assistant reply incrementally in the room's Copilot feed. Earlier chat replies and Positioning Brief submissions are excluded. Updates amend one ordered answer card, and a revision/change cursor prevents stale retries from overwriting newer text. Sharing retries while the Session remains open. Keep the Session open until sharing finishes; closing the app can interrupt it. The capture uses the embedded ChatGPT page's visible assistant text, so changes to ChatGPT's page structure may require updates; capture failures are shown in the sharing status. Do not switch GPT conversations during generation.
+
+Deploy Job Track migration `0021_session_streaming_answers.sql` and its updated API before using this feature. Restart/rebuild the Electron app to load its new preload/main-process handlers. Session content now fills the window, with responsive GPT/recording panes on narrow windows.

@@ -1,3 +1,4 @@
+import { SessionMain } from "@/components/session-main";
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
@@ -31,7 +32,7 @@ export default function RootLayout({
             <div className="flex min-h-screen flex-col">
               <ElectronTitlebar />
               <SiteNav />
-              <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">{children}</main>
+              <SessionMain>{children}</SessionMain>
             </div>
           </AuthGate>
           <Toaster richColors position="top-center" theme="dark" />

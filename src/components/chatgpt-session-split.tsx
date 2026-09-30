@@ -26,6 +26,16 @@ export function ChatGptSessionSplit({
   question: string;
   onQuestionChange: (value: string) => void;
 }) {
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const [availableWidth, setAvailableWidth] = React.useState(900);
+  React.useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => setAvailableWidth(element.clientWidth));
+    setAvailableWidth(element.clientWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const captureRef = React.useRef<ChatGptCaptureHandle>(null);
   const splitRef = React.useRef<HTMLDivElement | null>(null);
   const [rightWidth, setRightWidth] = React.useState(DEFAULT_RIGHT);
@@ -75,13 +85,16 @@ export function ChatGptSessionSplit({
     handle.addEventListener("pointercancel", onUp);
   };
 
+  const stacked = availableWidth < MIN_LEFT + MIN_RIGHT + 20;
+  const effectiveRightWidth = Math.min(rightWidth, Math.max(MIN_RIGHT, availableWidth - MIN_LEFT - 6));
   return (
     <div
-      className={`flex h-[min(78vh,820px)] min-h-[520px] overflow-hidden rounded-lg border border-border bg-background ${
+      ref={containerRef}
+      className={`w-full min-w-0 ${stacked ? "flex-col" : "flex-row"} flex h-[min(78vh,820px)] min-h-[520px] overflow-hidden rounded-lg border border-border bg-background ${
         dragging ? "select-none" : ""
       }`}
     >
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className={`flex min-h-0 min-w-0 flex-1 flex-col ${stacked ? "min-h-[280px]" : ""}`}>
         <ChatGptEmbed />
       </div>
       <div
@@ -90,13 +103,13 @@ export function ChatGptSessionSplit({
         aria-orientation="vertical"
         aria-label="Resize panels"
         onPointerDown={onSplitPointerDown}
-        className={`w-1.5 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/50 ${
+        className={`${stacked ? "hidden" : ""} w-1.5 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/50 ${
           dragging ? "bg-primary/60" : ""
         }`}
       />
       <aside
-        style={{ width: rightWidth }}
-        className="flex shrink-0 flex-col gap-2 bg-card/95 p-2"
+        style={{ width: stacked ? "100%" : effectiveRightWidth }}
+        className={`flex min-w-0 shrink-0 flex-col gap-2 overflow-y-auto bg-card/95 p-2 ${stacked ? "max-h-[45%]" : ""}`}
       >
         <div className="shrink-0 space-y-1">
           <p className="text-xs font-medium leading-none">

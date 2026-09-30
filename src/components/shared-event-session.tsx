@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionEvent, SessionMessage, SessionSnapshot } from "@/lib/shared-event-session-types";
+import { getElectronAPI } from "@/lib/electron";
 import { apiFetch } from "@/lib/client";
 const btnPrimary = "inline-flex items-center justify-center rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50";
 const btnSecondary = "inline-flex items-center justify-center rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50";
@@ -55,6 +56,8 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
   const [connectionError, setConnectionError] = useState("");
   const connection = useRef("");
   const cursor = useRef(0);
+  const changeCursor = useRef(0);
+  const [streamStatus, setStreamStatus] = useState("");
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const pendingMessage = useRef<{ id: string; kind: string; body: string } | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
@@ -63,20 +66,49 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
   const request = useCallback((payload: Record<string, unknown>): Promise<void> => {
     const task = queue.current.catch(() => {}).then(async () => {
       const next = await apiFetch<SessionSnapshot>(endpoint, { method: "POST",
-        body: JSON.stringify({ ...payload, connectionId: connection.current, after: cursor.current }), signal: AbortSignal.timeout(20_000) });
+        body: JSON.stringify({ ...payload, connectionId: connection.current, after: cursor.current, afterChange: changeCursor.current }), signal: AbortSignal.timeout(20_000) });
+      changeCursor.current = Math.max(changeCursor.current, next.changeCursor ?? 0);
       setSnapshot(next);
       setMessages(previous => {
         const byId = new Map(previous.map(m => [m.sequence, m]));
-        next.messages.forEach(m => byId.set(m.sequence, m));
+        next.messages.forEach(m => { if ((byId.get(m.sequence)?.revision ?? -1) <= (m.revision ?? 0)) byId.set(m.sequence, m); });
         return [...byId.values()].sort((a, b) => a.sequence - b.sequence);
       });
-      for (const message of next.messages) cursor.current = Math.max(cursor.current, message.sequence);
+      cursor.current = Math.max(cursor.current, next.messageCursor ?? cursor.current);
       setConnected(true);
       setConnectionError("");
     });
     queue.current = task;
     return task;
   }, [endpoint]);
+  useEffect(() => {
+    const api = getElectronAPI();
+    if (!api?.chatgpt.onAnswer) return;
+    type Update = { streamId: string; eventId: string; text: string; revision: number; done: boolean; error?: string };
+    const pending = new Map<string, Update>();
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const unsubscribe = api.chatgpt.onAnswer(update => {
+      if (update.eventId !== event.id) return;
+      pending.set(update.streamId, update);
+      setStreamStatus(update.error || "Sharing GPT answer…");
+    });
+    async function flush() {
+      const update = pending.values().next().value;
+      if (update) {
+        try {
+          await request({ op: "answer", clientId: update.streamId, body: update.text, revision: update.revision, done: update.done });
+          if (pending.get(update.streamId)?.revision === update.revision) pending.delete(update.streamId);
+          setStreamStatus(update.error || (update.done ? "GPT answer shared." : "Sharing GPT answer…"));
+        } catch (error) {
+          setStreamStatus(`Sharing interrupted; retrying. ${error instanceof Error ? error.message : ""}`);
+        }
+      }
+      if (!stopped) timer = setTimeout(flush, 500);
+    }
+    timer = setTimeout(flush, 500);
+    return () => { stopped = true; clearTimeout(timer); unsubscribe(); };
+  }, [event.id, request]);
   useEffect(() => {
     connection.current = crypto.randomUUID();
     const connectionId = connection.current;
@@ -110,7 +142,8 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
   return <div className="space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-2"><h1 className="text-2xl font-semibold">Session</h1><Link className={btnSecondary} href={calendarPath}>Back to calendar</Link></div>
     <p role="status" className="text-sm text-slate-500">{connected ? "Connected · updates every 500 ms" : `Connecting / reconnecting… ${connectionError} Presence may be out of date.`}</p>
-    <div className="grid gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
+    {streamStatus ? <p role="status" className="text-sm text-muted-foreground">{streamStatus}</p> : null}
+    <div className="grid min-w-0 gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
       <aside className={`${cardClass} flex min-w-0 flex-col gap-6 p-4`}>
         <section><h2 className="mb-3 font-semibold">Participants</h2><ul className="space-y-2">{snapshot?.participants.map(p => <li key={p.user_id} className="flex items-start gap-2 text-sm"><span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${connected && p.online ? "bg-emerald-500" : "bg-slate-400"}`} /><span>{p.name}{p.user_id === userId ? " (you)" : ""}<span className="block text-xs text-slate-500">{p.privilege} · {!connected ? "Unknown" : p.online ? "Online" : "Offline"}</span></span></li>)}</ul></section>
         <section className="space-y-3 border-t border-slate-200 pt-4"><h2 className="font-semibold">Event info</h2><dl className="space-y-3 text-sm">
@@ -137,7 +170,7 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
               ? "border-slate-200 border-l-4 border-l-indigo-400 bg-indigo-50/60 shadow-sm dark:border-slate-700 dark:border-l-indigo-400 dark:bg-indigo-950/30"
               : "border-slate-200 border-l-4 border-l-teal-400 bg-teal-50/60 shadow-sm dark:border-slate-700 dark:border-l-teal-400 dark:bg-teal-950/30"}`}>
             <div className={`flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400 ${tab === "copilot" ? "mb-3 border-b border-slate-200/70 pb-2 dark:border-slate-700" : "mb-1"}`}>
-              <span className="flex flex-wrap items-center gap-2">{tab === "copilot" ? <span className="rounded bg-white/80 px-2 py-1 font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">Answer {index + 1}</span> : null}<span className="font-medium">{m.name}{m.user_id === userId ? " (you)" : ""}</span></span>
+              <span className="flex flex-wrap items-center gap-2">{tab === "copilot" ? <span className="rounded bg-white/80 px-2 py-1 font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">Answer {index + 1}{m.streaming ? " · Generating…" : ""}</span> : null}<span className="font-medium">{m.name}{m.user_id === userId ? " (you)" : ""}</span></span>
               <time dateTime={m.sent_at}>{new Date(m.sent_at).toLocaleTimeString()}</time>
             </div>
             <p className={`whitespace-pre-wrap break-words font-sans ${tab === "copilot" ? "text-base leading-7" : "text-sm leading-6"}`}>{m.body}</p></article>)}<div ref={bottom} />

@@ -1,9 +1,11 @@
 export type SessionEvent = { id: string; title: string; candidate_name: string | null; job_title: string | null; job_id: string | null; application_candidate_id: string | null };
-export type SessionMessage = { sequence: number; user_id: string; name: string; kind: "chat" | "copilot"; body: string; sent_at: string };
+export type SessionMessage = { sequence: number; user_id: string; name: string; kind: "chat" | "copilot"; body: string; sent_at: string; revision: number; streaming: number; change_sequence: number };
 export type SessionSnapshot = {
   links: { meeting_link: string; support_link: string; meeting_version: number; support_version: number };
   participants: { user_id: string; name: string; privilege: string; online: boolean }[];
   messages: SessionMessage[];
+  changeCursor: number;
+  messageCursor: number;
 };
 export type SharedSessionContext = {
   event: SessionEvent; userId: string; privilege: string;

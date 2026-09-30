@@ -186,7 +186,8 @@ export const ChatGptCapturePanel = React.forwardRef<
     }
     setSending(true);
     try {
-      const result = await api.chatgpt.submit(text);
+      const eventId = new URL(window.location.href).searchParams.get("eventId");
+      const result = await api.chatgpt.submit(text, eventId ? { eventId, streamId: crypto.randomUUID() } : undefined);
       if (!result.ok) {
         toast.error("Could not send to ChatGPT", {
           description: result.error || "Open a ChatGPT chat and try again.",
