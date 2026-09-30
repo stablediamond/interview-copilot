@@ -1375,7 +1375,10 @@ function streamChatgptAnswer(wc, options, baseline) {
   emit(latest);
   async function tick() {
     try {
-      if (wc.isDestroyed() || Date.now() - started > 10 * 60_000) throw new Error("Answer capture ended before completion.");
+      if (wc.isDestroyed()) throw new Error("The GPT view was closed before capture finished.");
+      if (Date.now() - started > 10 * 60_000) throw new Error(latest.text
+        ? "GPT text was captured, but completion could not be confirmed."
+        : "No new GPT answer was detected. The GPT page structure may have changed.");
       const url = new URL(wc.getURL());
       if (url.hostname !== "chatgpt.com" && !url.hostname.endsWith(".chatgpt.com")) throw new Error("ChatGPT navigated away.");
       if (conversationPath && url.pathname !== conversationPath) throw new Error("ChatGPT switched conversations before capture finished.");
@@ -1429,7 +1432,6 @@ ipcMain.handle("chatgpt:submit", async (_e, raw, streamOptions) => {
       `(${clickChatgptSend})(${JSON.stringify(needle)})`,
       true
     );
-    if (baseline) baseline.expectedPrompt = text;
     if (result?.ok && baseline) streamChatgptAnswer(chatgptView.webContents, { streamId: streamOptions.streamId, eventId: streamOptions.eventId }, baseline);
     if (result && typeof result === "object") return result;
     return { ok: true };
