@@ -118,7 +118,6 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
           <div><dt className="text-slate-500">Event</dt><dd>{event.title}</dd></div>
           <div><dt className="text-slate-500">Application job title</dt><dd>{event.job_title || "No application linked"}</dd></div>
         </dl></section>
-        {briefPanel}
         <section className="mt-auto space-y-4 border-t border-slate-200 pt-4">{snapshot ? <>
           <MeetingLink readOnly={!canEditMeeting} label="Real meeting link" value={snapshot.links.meeting_link} version={snapshot.links.meeting_version} save={saveLink("meeting")} />
           <MeetingLink label="Support meeting link" value={snapshot.links.support_link} version={snapshot.links.support_version} save={saveLink("support")} />
@@ -126,7 +125,7 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
       </aside>
       <section className={`${cardClass} flex min-w-0 flex-col p-4`}>
         <div role="tablist" aria-label="Session content" className="mb-4 flex flex-wrap border-b border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/50">{(["chat", "copilot", "gpt", ...(candidatePanel && applicationPanel ? ["candidate", "application"] as const : [])] as const).map(kind => <button key={kind} role="tab" aria-selected={tab === kind} className={`-mb-px border-b-2 px-5 py-3 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-indigo-500 ${tab === kind ? "border-indigo-600 text-indigo-700 dark:border-indigo-400 dark:text-indigo-300" : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"}`} onClick={() => { follow.current = true; setTab(kind); }}>{({ chat: "Chats", copilot: "Copilot", candidate: "Candidate", application: "Application", gpt: "GPT" })[kind]}</button>)}</div>
-        <div className={tab === "gpt" ? "min-w-0" : "hidden"}>{tab === "gpt" ? gptPanel : null}</div>
+        <div className={tab === "gpt" ? "min-w-0 space-y-4" : "hidden"}>{tab === "gpt" ? <>{briefPanel}{gptPanel}</> : null}</div>
         {tab === "gpt" ? null : showMessages ? <>
         <div role="tabpanel" aria-label={tab === "chat" ? "Chats" : "Copilot"} className="h-[50vh] min-h-64 space-y-3 overflow-y-auto [overflow-anchor:none]" onScroll={e => { const el = e.currentTarget; follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
           {!messages.some(m => m.kind === tab) ? <p className="text-sm text-slate-500">{tab === "chat" ? "Start the conversation." : "Share an answer with everyone in this session."}</p> : null}

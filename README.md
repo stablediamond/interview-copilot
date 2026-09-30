@@ -246,6 +246,6 @@ src/lib/                db, llm wrapper, prompts, schemas, context selection, he
 
 Opening Session from a calendar event now shows the Job Track room: participant presence, event details, real/support meeting links, Chats, Copilot answers, and linked Candidate/Application tabs. It uses the same event ID and data as Job Track, syncing every 500 ms after each completed request. Only managers may edit the real meeting link. Candidate details omit credentials and work experience. Application details are displayed locally; document downloads and management actions open the full Job Track application page.
 
-Build brief remains in the sidebar, and the existing GPT/caption workspace is available under GPT. Sessions without a calendar event retain the standalone brief/GPT flow. If shared-session loading fails, Retry is available and the brief/GPT workspace remains usable.
+Positioning Brief appears above the GPT and Record & Answer workspace in the GPT tab. Sessions without a calendar event retain the standalone brief/GPT flow. If shared-session loading fails, Retry is available and the brief/GPT workspace remains usable.
 
 Deploy the accompanying Job Track bearer-token support for `/api/event-sessions/{eventId}` and ensure migration `0020_event_sessions.sql` is applied. The desktop app forwards its signed-in user's token through a local proxy; tokens are never put in URLs. Run `node scripts/test-shared-session.cjs` to check the proxy contract.
