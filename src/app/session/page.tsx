@@ -15,6 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { SharedEventSession } from "@/components/shared-event-session";
+import { SharedCandidateDetails, SharedApplicationDetails } from "@/components/shared-session-details";
+import type { SharedSessionContext } from "@/lib/shared-event-session-types";
 import { ChatGptSessionSplit } from "@/components/chatgpt-session-split";
 import { SessionMaterialsDialog } from "@/components/session-materials-dialog";
 import { useSettings } from "@/hooks/use-settings";
@@ -75,6 +78,18 @@ function SessionPageContent() {
   const [detectedQuestion, setDetectedQuestion] = React.useState("");
   const [briefBuilding, setBriefBuilding] = React.useState(false);
   const [editOpen, setEditOpen] = React.useState(false);
+  const [shared, setShared] = React.useState<SharedSessionContext | null>(null);
+  const [sharedError, setSharedError] = React.useState("");
+  const [sharedRetry, setSharedRetry] = React.useState(0);
+  React.useEffect(() => {
+    let cancelled = false;
+    setShared(null); setSharedError("");
+    if (!eventId) return;
+    void apiFetch<SharedSessionContext>(`/api/calendar/shared-session?eventId=${encodeURIComponent(eventId)}`)
+      .then(value => { if (!cancelled) setShared(value); })
+      .catch(error => { if (!cancelled) setSharedError(error instanceof Error ? error.message : "Could not load shared session."); });
+    return () => { cancelled = true; };
+  }, [eventId, sharedRetry]);
 
   React.useEffect(() => {
     if (!hydrated) return;
@@ -180,6 +195,16 @@ function SessionPageContent() {
 
   return (
     <div className="space-y-4">
+      {eventId ? shared ? (
+        <SharedEventSession key={eventId} event={shared.event} userId={shared.userId}
+          canEditMeeting={shared.privilege === "manager"} calendarPath="/calendar"
+          candidatePanel={shared.candidate && shared.application ? <SharedCandidateDetails context={shared} /> : undefined}
+          applicationPanel={shared.candidate && shared.application ? <SharedApplicationDetails context={shared} /> : undefined}
+          briefPanel={<PositioningBriefCard building={briefBuilding} canBuild={hydrated} onEdit={() => setEditOpen(true)} onBuild={() => void buildBrief()} />}
+          gptPanel={editOpen ? null : <ChatGptSessionSplit question={detectedQuestion} onQuestionChange={setDetectedQuestion} />}
+        />
+      ) : <Card><CardContent className="space-y-3 p-4"><p role="status">{sharedError || "Loading shared event session…"}</p>{sharedError ? <Button onClick={() => setSharedRetry(value => value + 1)}>Retry</Button> : <Spinner />}</CardContent></Card> : (
+        <>
       <div>
         <h1 className="text-xl font-bold tracking-tight">Live session</h1>
         <p className="text-sm text-muted-foreground">
@@ -221,6 +246,14 @@ function SessionPageContent() {
         onBuild={() => void buildBrief()}
       />
 
+        </>
+      )}
+
+      {eventId && sharedError ? <>
+        <PositioningBriefCard building={briefBuilding} canBuild={hydrated} onEdit={() => setEditOpen(true)} onBuild={() => void buildBrief()} />
+        {editOpen ? null : <ChatGptSessionSplit question={detectedQuestion} onQuestionChange={setDetectedQuestion} />}
+      </> : null}
+
       <SessionMaterialsDialog
         open={editOpen}
         onOpenChange={setEditOpen}
@@ -250,7 +283,7 @@ function SessionPageContent() {
         }}
       />
 
-      {editOpen ? null : (
+      {eventId || editOpen ? null : (
         <ChatGptSessionSplit
           question={detectedQuestion}
           onQuestionChange={setDetectedQuestion}
@@ -273,7 +306,7 @@ function PositioningBriefCard({
 }) {
   return (
     <Card>
-      <CardHeader className="flex flex-col gap-3 space-y-0 pb-3 sm:flex-row sm:items-start sm:justify-between">
+      <CardHeader className="flex flex-col gap-3 space-y-0 pb-3 flex-wrap">
         <div className="space-y-0.5">
           <CardTitle className="flex items-center gap-2 text-base">
             <Compass className="h-4 w-4" /> Positioning brief
@@ -283,7 +316,7 @@ function PositioningBriefCard({
             send them into ChatGPT.
           </CardDescription>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button type="button" size="sm" variant="outline" onClick={onEdit}>
             Edit
           </Button>
