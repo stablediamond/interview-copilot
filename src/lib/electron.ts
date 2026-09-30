@@ -23,6 +23,15 @@ export interface ChatgptBounds {
   height: number;
 }
 
+export interface ChatgptAnswerUpdate {
+  streamId: string;
+  eventId: string;
+  text: string;
+  revision: number;
+  done: boolean;
+  error?: string;
+}
+
 export interface JobTrackStoredSession {
   token: string;
   email: string;
@@ -73,7 +82,8 @@ export interface ElectronAPI {
     goForward: () => Promise<void>;
     clearSession: () => Promise<void>;
     submit: (text: string, options?: { streamId: string; eventId: string }) => Promise<{ ok: boolean; error?: string }>;
-    onAnswer: (callback: (update: { streamId: string; eventId: string; text: string; revision: number; done: boolean; error?: string }) => void) => () => void;
+    getAnswers: (eventId: string) => Promise<ChatgptAnswerUpdate[]>;
+    onAnswer: (callback: (update: ChatgptAnswerUpdate) => void) => () => void;
     zoomIn: () => Promise<number>;
     zoomOut: () => Promise<number>;
     getZoom: () => Promise<number>;

@@ -52,6 +52,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     goForward: () => ipcRenderer.invoke("chatgpt:forward"),
     clearSession: () => ipcRenderer.invoke("chatgpt:clear-session"),
     submit: (text, options) => ipcRenderer.invoke("chatgpt:submit", text, options),
+    getAnswers: (eventId) => ipcRenderer.invoke("chatgpt:get-answers", eventId),
     onAnswer: (callback) => {
       const handler = (_e, update) => callback(update);
       ipcRenderer.on("chatgpt-answer", handler);

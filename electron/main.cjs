@@ -1364,6 +1364,26 @@ function pastePlainIntoChatgpt() {
 const { readChatgptAnswer, createAnswerTracker } = require("./chatgpt-answer-stream.cjs");
 let sharedAnswerActive = false;
 let chatgptSubmitActive = false;
+// Keep the latest revision available while a Session page reloads or unmounts.
+// No prompt/answer text is written to logs or disk by the capture diagnostics.
+let sharedAnswerAccountVersion = 0;
+const sharedAnswerUpdates = new Map();
+ipcMain.handle("chatgpt:get-answers", (_e, eventId) => [...sharedAnswerUpdates.values()].filter(update => update.eventId === eventId));
+function emitSharedAnswer(options, update) {
+  const payload = { ...options, ...update };
+  sharedAnswerUpdates.set(`${options.eventId}:${options.streamId}`, payload);
+  while (sharedAnswerUpdates.size > 20) sharedAnswerUpdates.delete(sharedAnswerUpdates.keys().next().value);
+  if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("chatgpt-answer", payload);
+}
+async function sampleChatgptAnswer(wc) {
+  let timeout;
+  try {
+    return await Promise.race([
+      wc.executeJavaScript(`(${readChatgptAnswer})()`),
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("The GPT page did not respond to answer capture within 10 seconds.")), 10_000); }),
+    ]);
+  } finally { clearTimeout(timeout); }
+}
 function streamChatgptAnswer(wc, options, baseline) {
   sharedAnswerActive = true;
   const track = createAnswerTracker(baseline);
@@ -1371,10 +1391,22 @@ function streamChatgptAnswer(wc, options, baseline) {
   if (!conversationPath.startsWith("/c/")) conversationPath = null;
   const started = Date.now();
   let latest = { text: "", revision: 1, done: false };
-  const emit = (update) => mainWindow?.webContents.send("chatgpt-answer", { ...options, ...update });
+  const accountVersion = sharedAnswerAccountVersion;
+  const emit = (update) => { if (accountVersion === sharedAnswerAccountVersion) emitSharedAnswer(options, update); };
+  let lastDiagnostic = "", lastLog = 0, sample = null;
+  const diagnostics = () => ({
+    state: track.status(), elapsedMs: Date.now() - started,
+    users: sample?.userCount ?? 0, assistants: sample?.assistantCount ?? 0,
+    afterUser: Boolean(sample?.afterUser), chars: sample?.text?.length ?? 0,
+    activeStop: Boolean(sample?.activeStop), markedStreaming: Boolean(sample?.markedStreaming),
+    complete: Boolean(sample?.complete), idleComposer: Boolean(sample?.idleComposer),
+    revision: latest.revision,
+  });
+  log("GPT answer capture started", options.streamId, "baseline users:", baseline.userCount, "assistants:", baseline.assistantCount);
   emit(latest);
   async function tick() {
     try {
+      if (accountVersion !== sharedAnswerAccountVersion) throw new Error("The signed-in account changed during answer capture.");
       if (wc.isDestroyed()) throw new Error("The GPT view was closed before capture finished.");
       if (Date.now() - started > 10 * 60_000) throw new Error(latest.text
         ? "GPT text was captured, but completion could not be confirmed."
@@ -1383,15 +1415,22 @@ function streamChatgptAnswer(wc, options, baseline) {
       if (url.hostname !== "chatgpt.com" && !url.hostname.endsWith(".chatgpt.com")) throw new Error("ChatGPT navigated away.");
       if (conversationPath && url.pathname !== conversationPath) throw new Error("ChatGPT switched conversations before capture finished.");
       if (!conversationPath && url.pathname.startsWith("/c/")) conversationPath = url.pathname;
-      const sample = await wc.executeJavaScript(`(${readChatgptAnswer})()`);
+      sample = await sampleChatgptAnswer(wc);
       const update = track(sample);
       if (update) { latest = update; emit(update); }
+      const state = track.status();
+      if (state !== lastDiagnostic || Date.now() - lastLog >= 10_000) {
+        log("GPT answer capture", options.streamId, JSON.stringify(diagnostics()));
+        lastDiagnostic = state; lastLog = Date.now();
+      }
       if (update?.done) { sharedAnswerActive = false; return; }
       setTimeout(tick, 350);
     } catch (error) {
       sharedAnswerActive = false;
-      emit({ text: latest.text || "Answer capture interrupted. Retry from the GPT tab.", revision: latest.revision + 1, done: true,
-        error: error instanceof Error ? error.message : "Could not capture the GPT answer." });
+      const detail = error instanceof Error ? error.message : "Could not capture the GPT answer.";
+      log("GPT answer capture failed", options.streamId, detail, JSON.stringify(diagnostics()));
+      const reason = `${detail} Capture status: ${track.status()}.`;
+      emit({ text: latest.text || `Could not capture the GPT answer. ${reason}`, revision: latest.revision + 1, done: true, error: reason });
     }
   }
   setTimeout(tick, 350);
@@ -1411,8 +1450,8 @@ ipcMain.handle("chatgpt:submit", async (_e, raw, streamOptions) => {
   }
   try {
     const sharing = streamOptions && /^[\w-]{1,80}$/.test(streamOptions.streamId || "") && /^[\w-]{1,200}$/.test(streamOptions.eventId || "");
-    const baseline = sharing ? await chatgptView.webContents.executeJavaScript(`(${readChatgptAnswer})()`) : null;
-    if (baseline?.busy) return { ok: false, error: "Wait for ChatGPT to finish the current answer." };
+    const baseline = sharing ? await sampleChatgptAnswer(chatgptView.webContents) : null;
+    if (baseline?.activeStop || (baseline?.busy && !baseline?.idleComposer)) return { ok: false, error: "Wait for ChatGPT to finish the current answer." };
     const focused = await chatgptView.webContents.executeJavaScript(
       `(${focusChatgptComposer})()`,
       true
@@ -1468,11 +1507,19 @@ ipcMain.handle("job-track:get-session", () => {
 ipcMain.handle("job-track:set-session", (_e, session) => {
   try {
     if (!session) {
+      sharedAnswerAccountVersion += 1;
+      sharedAnswerUpdates.clear();
       fs.unlinkSync(jobTrackSessionPath());
       return true;
     }
     if (typeof session !== "object" || typeof session.token !== "string") {
       return false;
+    }
+    let previousEmail = null;
+    try { previousEmail = JSON.parse(fs.readFileSync(jobTrackSessionPath(), "utf8")).email; } catch { /* No saved login. */ }
+    if (!previousEmail || previousEmail !== session.email) {
+      sharedAnswerAccountVersion += 1;
+      sharedAnswerUpdates.clear();
     }
     fs.writeFileSync(jobTrackSessionPath(), JSON.stringify(session));
     return true;

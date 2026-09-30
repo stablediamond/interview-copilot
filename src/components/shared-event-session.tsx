@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionEvent, SessionMessage, SessionSnapshot } from "@/lib/shared-event-session-types";
-import { getElectronAPI } from "@/lib/electron";
+import { getElectronAPI, type ChatgptAnswerUpdate } from "@/lib/electron";
 import { apiFetch } from "@/lib/client";
 const btnPrimary = "inline-flex items-center justify-center rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50";
 const btnSecondary = "inline-flex items-center justify-center rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50";
@@ -84,15 +84,23 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
   useEffect(() => {
     const api = getElectronAPI();
     if (!api?.chatgpt.onAnswer) return;
-    type Update = { streamId: string; eventId: string; text: string; revision: number; done: boolean; error?: string };
-    const pending = new Map<string, Update>();
+    const pending = new Map<string, ChatgptAnswerUpdate>();
+    const revisions = new Map<string, number>();
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
-    const unsubscribe = api.chatgpt.onAnswer(update => {
-      if (update.eventId !== event.id) return;
+    const receive = (update: ChatgptAnswerUpdate) => {
+      if (stopped || update.eventId !== event.id || update.revision <= (revisions.get(update.streamId) ?? 0)) return;
+      revisions.set(update.streamId, update.revision);
       pending.set(update.streamId, update);
       setStreamStatus(update.error || "Sharing GPT answer…");
-    });
+    };
+    // Subscribe first so a newer live update cannot be lost while replay loads.
+    const unsubscribe = api.chatgpt.onAnswer(receive);
+    if (api.chatgpt.getAnswers) {
+      void api.chatgpt.getAnswers(event.id).then(updates => updates.forEach(receive)).catch(error => {
+        if (!stopped && !revisions.size) setStreamStatus(`Could not restore the GPT answer. ${error instanceof Error ? error.message : ""}`);
+      });
+    }
     async function flush() {
       const update = pending.values().next().value;
       if (update) {
