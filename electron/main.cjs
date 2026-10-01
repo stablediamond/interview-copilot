@@ -1267,83 +1267,43 @@ function focusChatgptComposer() {
   return { ok: true };
 }
 
-/** Click Send once the pasted brief is in the composer. Runs in the guest page. */
-async function clickChatgptSend(needle) {
-  const composerSelectors = [
-    "#prompt-textarea",
-    '[data-testid="prompt-textarea"]',
-    '[contenteditable="true"][data-lexical-editor="true"]',
-    "div.ProseMirror[contenteditable='true']",
-    '[contenteditable="true"][role="textbox"]',
-  ];
-  const sendSelectors = [
-    'button[data-testid="send-button"]',
-    "#composer-submit-button",
-    'button[aria-label="Send prompt"]',
-    'button[aria-label="Send message"]',
-  ];
-  const want = String(needle || "").trim();
+/** Guest-side diagnostic: does this page throttle timers (hidden/occluded view)? */
+async function probeChatgptTimers() {
+  const started = performance.now();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  return {
+    visibility: document.visibilityState,
+    hasFocus: document.hasFocus(),
+    timerLagMs: Math.round(performance.now() - started - 20),
+  };
+}
 
-  function isVisible(el) {
-    if (!el) return false;
-    const r = el.getBoundingClientRect();
-    const style = window.getComputedStyle(el);
-    return (
-      r.width > 0 &&
-      r.height > 0 &&
-      style.visibility !== "hidden" &&
-      style.display !== "none"
-    );
-  }
-
-  function pick(selectors) {
-    for (const sel of selectors) {
-      for (const el of document.querySelectorAll(sel)) {
-        if (isVisible(el)) return el;
-      }
+/**
+ * Put `text` into the (already focused and selected) ChatGPT composer.
+ * Single-line text is inserted directly in one input event; simulating
+ * Ctrl+Shift+V and waiting for ChatGPT to process a paste is much slower.
+ * Multi-line text, or an insert ChatGPT does not accept, uses the paste path.
+ */
+async function fillChatgptComposer(wc, text, needle) {
+  wc.focus();
+  if (!/[\r\n]/.test(text) && typeof wc.insertText === "function") {
+    try {
+      await wc.insertText(text);
+      const deadline = Date.now() + 400;
+      do {
+        const probe = await runProbe(wc, needle, false);
+        if (probe.hasText) return "insert";
+        await sleepMs(15);
+      } while (Date.now() < deadline);
+    } catch (err) {
+      log("chatgpt direct insert failed:", err instanceof Error ? err.message : String(err));
     }
-    return null;
+    // Re-select the composer so the paste replaces any partial insert.
+    await wc.executeJavaScript(`(${focusChatgptComposer})()`, true);
   }
-
-  for (let i = 0; i < 40; i++) {
-    const composer = pick(composerSelectors);
-    const value = composer
-      ? String(composer.innerText || composer.value || "")
-      : "";
-    if (want && !value.includes(want)) {
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      continue;
-    }
-    const send = pick(sendSelectors);
-    if (send && !send.disabled && send.getAttribute("aria-disabled") !== "true") {
-      send.click();
-      return { ok: true };
-    }
-    await new Promise((resolve) => setTimeout(resolve, 40));
-  }
-
-  const composer = pick(composerSelectors);
-  const value = String(composer?.innerText || composer?.value || "");
-  if (composer && want && value.includes(want)) {
-    composer.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "Enter",
-        code: "Enter",
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true,
-      })
-    );
-    // An untrusted keyboard event can be ignored. Do not create a permanent
-    // Generating card unless ChatGPT actually consumes the submitted prompt.
-    for (let i = 0; i < 50; i++) {
-      await new Promise(resolve => setTimeout(resolve, 40));
-      const current = pick(composerSelectors);
-      if (current && !String(current.innerText || current.value || "").trim()) return { ok: true };
-    }
-  }
-  return { ok: false, error: "ChatGPT did not confirm prompt submission. Check the GPT tab before trying again." };
+  clipboard.writeText(text);
+  pastePlainIntoChatgpt();
+  return "paste";
 }
 
 function sendChatgptKey(type, keyCode, modifiers) {
@@ -1372,6 +1332,7 @@ function pastePlainIntoChatgpt() {
 
 const { readChatgptAnswer, createAnswerTracker } = require("./chatgpt-answer-stream.cjs");
 const { createChatgptStreamCapture } = require("./chatgpt-stream-capture.cjs");
+const { runProbe, sendChatgptPrompt, sleepMs } = require("./chatgpt-send.cjs");
 let sharedAnswerActive = false;
 let chatgptSubmitActive = false;
 // Keep the latest revision available while a Session page reloads or unmounts.
@@ -1516,13 +1477,25 @@ ipcMain.handle("chatgpt:submit", async (_e, raw, streamOptions) => {
     previousText = "";
   }
   try {
+    const wc = chatgptView.webContents;
     const sharing = streamOptions && /^[\w-]{1,80}$/.test(streamOptions.streamId || "") && /^[\w-]{1,200}$/.test(streamOptions.eventId || "");
-    const baseline = sharing ? await sampleChatgptAnswer(chatgptView.webContents, text) : null;
+    const began = Date.now();
+    const timings = {};
+    const mark = (name) => { timings[name] = Date.now() - began; };
+    if (sharing) streamCapture = createChatgptStreamCapture(wc, log);
+    // Diagnostic only, never awaited on the critical path.
+    const timerProbePromise = wc.executeJavaScript(`(${probeChatgptTimers})()`, true).catch(() => null);
+    // Independent preparation steps run together: the answer baseline, focusing
+    // (and selecting) the composer, and attaching the response-stream reader
+    // (it must be attached before Send so the first byte is seen).
+    const [baseline, focused, attached] = await Promise.all([
+      sharing ? sampleChatgptAnswer(wc, text) : null,
+      wc.executeJavaScript(`(${focusChatgptComposer})()`, true),
+      streamCapture ? streamCapture.start() : false,
+    ]);
+    mark("prepare");
+    if (!attached) streamCapture = null;
     if (baseline?.activeStop || (baseline?.busy && !baseline?.idleComposer)) return { ok: false, error: "Wait for ChatGPT to finish the current answer." };
-    const focused = await chatgptView.webContents.executeJavaScript(
-      `(${focusChatgptComposer})()`,
-      true
-    );
     if (!focused?.ok) {
       return (
         focused || {
@@ -1531,21 +1504,23 @@ ipcMain.handle("chatgpt:submit", async (_e, raw, streamOptions) => {
         }
       );
     }
-    clipboard.writeText(text);
-    pastePlainIntoChatgpt();
     const needle = text.trim().slice(0, 48);
-    if (baseline) {
-      // Attach before sending so the new response stream is observed from its first byte.
-      streamCapture = createChatgptStreamCapture(chatgptView.webContents, log);
-      if (!(await streamCapture.start())) streamCapture = null;
-    }
-    const result = await chatgptView.webContents.executeJavaScript(
-      `(${clickChatgptSend})(${JSON.stringify(needle)})`,
-      true
-    );
-    if (result?.ok && baseline) { streamChatgptAnswer(chatgptView.webContents, { streamId: streamOptions.streamId, eventId: streamOptions.eventId }, baseline, text, streamCapture); streamCapture = null; }
-    if (result && typeof result === "object") return result;
-    return { ok: true };
+    const filledBy = await fillChatgptComposer(wc, text, needle);
+    mark("fill");
+    const result = await sendChatgptPrompt(wc, needle, () => {
+      wc.focus();
+      sendChatgptKey("keyDown", "Enter", []);
+      sendChatgptKey("keyUp", "Enter", []);
+    });
+    mark("send");
+    // Durations only: never log prompt text. Logged in the background so the
+    // timer diagnostic can never delay the answer capture.
+    const timingSummary = { ...timings, filledBy, ...result.stats, chars: text.length, streamAttached: Boolean(streamCapture) };
+    void Promise.race([timerProbePromise, sleepMs(1500).then(() => null)]).then((timerProbe) => {
+      log("GPT submit timings", JSON.stringify({ ...timingSummary, ...(timerProbe || {}) }));
+    });
+    if (result.ok && baseline) { streamChatgptAnswer(chatgptView.webContents, { streamId: streamOptions.streamId, eventId: streamOptions.eventId }, baseline, text, streamCapture); streamCapture = null; }
+    return result.ok ? { ok: true } : { ok: false, error: result.error };
   } catch (err) {
     streamCapture?.stop();
     log("chatgpt submit failed:", err instanceof Error ? err.message : String(err));

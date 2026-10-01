@@ -12,6 +12,7 @@ if (!process.versions.electron || process.env.ELECTRON_RUN_AS_NODE) {
 
 const { app, BrowserWindow, WebContentsView } = require('electron');
 const { readChatgptAnswer, createAnswerTracker } = require('../electron/chatgpt-answer-stream.cjs');
+const { sendChatgptPrompt } = require('../electron/chatgpt-send.cjs');
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-answer-electron-'));
 app.once('quit', () => fs.rmSync(temporary, { recursive: true, force: true }));
 app.setPath('userData', path.join(temporary, 'profile'));
@@ -184,6 +185,78 @@ async function run() {
     now += 2500;
     assert.deepEqual(track(await sample({ expectedPrompt })), { text: 'First paragraph.\nSecond paragraph.', revision: 3, done: true });
   });
+
+  await test('direct text insertion fills a contenteditable composer in one input event', async () => {
+    await reset('<main></main><div id="prompt-textarea" contenteditable="true">old draft</div>');
+    await evaluate(() => {
+      window.inputs = 0;
+      const composer = document.getElementById('prompt-textarea');
+      composer.addEventListener('input', () => { window.inputs += 1; });
+      composer.focus();
+      const range = document.createRange();
+      range.selectNodeContents(composer);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    });
+    wc.focus();
+    const caption = 'Tell me about a time you resolved a conflict on your team.';
+    const started = Date.now();
+    await wc.insertText(caption);
+    const state = await evaluate(() => ({ text: document.getElementById('prompt-textarea').innerText, inputs: window.inputs }));
+    assert.equal(state.text, caption, 'The selected draft is replaced by the inserted text');
+    assert.equal(state.inputs, 1, 'The composer sees one input event, not one per key');
+    assert.ok(Date.now() - started < 2000);
+  });
+
+  // The suite freezes Date.now for tracker tests; sending logic needs real time.
+  const realClock = async fn => {
+    const frozen = Date.now;
+    Date.now = () => Math.floor(performance.timeOrigin + performance.now());
+    try { await fn(); } finally { Date.now = frozen; }
+  };
+
+  await test('send clicks a usable Send button immediately without pressing Enter', () => realClock(async () => {
+    await reset('<main></main><div id="prompt-textarea" contenteditable="true">Tell me about your last project in detail</div><button id="send" data-testid="send-button">Send</button>');
+    await evaluate(() => {
+      window.clicks = 0;
+      document.getElementById('send').addEventListener('click', () => { window.clicks += 1; });
+    });
+    const started = Date.now();
+    const result = await sendChatgptPrompt(wc, 'Tell me about your last project', () => { throw new Error('Enter must not be needed'); });
+    assert.equal(result.ok, true);
+    assert.equal(await evaluate(() => window.clicks), 1, 'Send is clicked exactly once');
+    assert.ok(Date.now() - started < 1000, `Send took ${Date.now() - started} ms`);
+  }));
+
+  await test('send presses a trusted Enter key immediately when the Send button is not usable', () => realClock(async () => {
+    await reset('<main></main><div id="prompt-textarea" contenteditable="true">Enter submits this prompt</div><button data-testid="send-button" disabled>Send</button>');
+    await evaluate(() => {
+      window.enterKeys = 0;
+      document.getElementById('prompt-textarea').addEventListener('keydown', event => {
+        if (event.key !== 'Enter') return;
+        window.enterKeys += event.isTrusted ? 1 : 0;
+        event.preventDefault();
+        event.target.textContent = '';
+      });
+    });
+    wc.focus();
+    await evaluate(() => document.getElementById('prompt-textarea').focus());
+    const result = await sendChatgptPrompt(wc, 'Enter submits this prompt', () => {
+      wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+      wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+    }, 3000);
+    assert.equal(result.ok, true);
+    assert.equal(await evaluate(() => window.enterKeys), 1, 'One trusted Enter key was delivered');
+    assert.ok(result.stats.enterMs < 250, `Enter was pressed after ${result.stats.enterMs} ms, with no extra waiting`);
+  }));
+
+  await test('send reports failure when the prompt never reaches the composer', () => realClock(async () => {
+    await reset('<main></main><div id="prompt-textarea" contenteditable="true"></div><button data-testid="send-button">Send</button>');
+    const result = await sendChatgptPrompt(wc, 'This text never arrives', () => {}, 300);
+    assert.equal(result.ok, false);
+    assert.match(result.error, /did not confirm/);
+  }));
 
   await test('missing answer reports a text-free layout outline', async () => {
     const expectedPrompt = 'A prompt without any answer yet.';
