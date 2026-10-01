@@ -112,9 +112,9 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
           setStreamStatus(`Sharing interrupted; retrying. ${error instanceof Error ? error.message : ""}`);
         }
       }
-      if (!stopped) timer = setTimeout(flush, 500);
+      if (!stopped) timer = setTimeout(flush, 100);
     }
-    timer = setTimeout(flush, 500);
+    timer = setTimeout(flush, 100);
     return () => { stopped = true; clearTimeout(timer); unsubscribe(); };
   }, [event.id, request]);
   useEffect(() => {
@@ -125,7 +125,7 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
     async function sync() {
       try { await request({ op: "sync" }); }
       catch (error) { setConnected(false); setConnectionError(error instanceof Error ? error.message : "Connection failed."); }
-      if (!stopped) timer = setTimeout(sync, 500);
+      if (!stopped) timer = setTimeout(sync, 150);
     }
     void sync();
     const leave = () => { void apiFetch(endpoint, { method: "POST", keepalive: true, body: JSON.stringify({ op: "leave", connectionId, after: 0 }) }).catch(() => {}); };

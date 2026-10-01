@@ -147,6 +147,29 @@ function readChatgptAnswer(options = {}) {
     }
     if (tail.length) { after = tail; assistants = tail; tailFallback = true; }
   }
+  // Fallback text extraction walks visible text nodes of the live DOM so block
+  // boundaries become newlines, and skips controls, screen-reader status text
+  // and ChatGPT's own notices (which are not part of the answer).
+  const fallbackSkipSelector = `button, [role="button"], svg, .sr-only, [class*="sr-only"], [hidden], [aria-hidden="true"], ${excludedSelector}, ${reasoningSelector}`;
+  const blockTag = /^(P|DIV|LI|UL|OL|H[1-6]|PRE|TABLE|TR|BLOCKQUOTE|SECTION|ARTICLE|BR|HR)$/;
+  const noiseLine = /^(chatgpt is (responding|thinking|generating)[.…]*|chatgpt can make mistakes\b.*|check important info\.?|latest response|thinking[.…]*|you said:?|chatgpt said:?|copy|edit message|good response|bad response|share|retry|try again)$/i;
+  const liveText = root => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const blockOf = el => { for (let node = el; node && node !== root.parentElement; node = node.parentElement) if (blockTag.test(node.tagName)) return node; return root; };
+    let out = '', lastBlock = null;
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const parent = node.parentElement;
+      if (!parent || parent.closest(fallbackSkipSelector) || !node.nodeValue.trim()) continue;
+      const block = blockOf(parent);
+      if (lastBlock && block !== lastBlock) out += '\n';
+      out += node.nodeValue.replace(/\s+/g, ' ');
+      lastBlock = block;
+    }
+    return out.split('\n').map(line => line.trim()).filter(line => line && !noiseLine.test(line)).join('\n');
+  };
+  const respondingPattern = /\bis (responding|thinking|generating)\b/i;
+  const respondingNotice = tailFallback && ([...document.querySelectorAll('[aria-live], [role="status"], .sr-only, [class*="sr-only"]')].some(el => respondingPattern.test(el.textContent || ''))
+    || after.some(el => respondingPattern.test(el.textContent || '')));
   const assistant = after.at(-1);
   const turn = assistant?.closest(turnSelector) || assistant;
 
@@ -184,20 +207,21 @@ function readChatgptAnswer(options = {}) {
     return style.display !== 'none' && style.visibility !== 'hidden' && el.getClientRects().length > 0;
   };
   const enabled = el => !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-  const activeStop = [...document.querySelectorAll('[data-testid="stop-button"], button[aria-label="Stop streaming"], button[aria-label="Stop generating"], button[aria-label="Stop response"], #composer-submit-button')]
+  const activeStop = [...document.querySelectorAll('[data-testid="stop-button"], button[aria-label="Stop streaming"], button[aria-label="Stop generating"], button[aria-label="Stop response"], button[aria-label^="Stop"], button[data-testid*="stop"], #composer-submit-button')]
     .filter(el => el.id !== 'composer-submit-button' || /stop/i.test(`${el.getAttribute('data-testid') || ''} ${el.getAttribute('aria-label') || ''} ${el.textContent || ''}`))
     .some(el => visible(el) && enabled(el));
   // These actions are often hidden until hover (or while the GPT tab is hidden).
   // Their presence in THIS answer's turn is a completion signal; visibility is not.
   const completionSelector = '[data-testid="copy-turn-action-button"], [data-testid="good-response-turn-action-button"], [data-testid="bad-response-turn-action-button"]';
   const hasCompletionActions = [...(tailFallback ? after.flatMap(el => [...el.querySelectorAll(completionSelector)]) : turn?.querySelectorAll(completionSelector) || [])].some(enabled);
-  const markedStreaming = Boolean(assistant?.closest('[data-is-streaming="true"]') || turn?.querySelector('[data-is-streaming="true"], .result-streaming'));
+  const markedStreaming = respondingNotice || Boolean(assistant?.closest('[data-is-streaming="true"]') || turn?.querySelector('[data-is-streaming="true"], .result-streaming'));
   const composer = document.querySelector('#prompt-textarea, [data-testid="prompt-textarea"], [data-testid="composer"] textarea, [contenteditable="true"][data-lexical-editor="true"], div.ProseMirror[contenteditable="true"], [contenteditable="true"][role="textbox"]');
   const send = document.querySelector('button[data-testid="send-button"], #composer-submit-button, button[aria-label="Send prompt"], button[aria-label="Send message"]');
   const stopVariant = send && /stop/i.test(`${send.getAttribute('data-testid') || ''} ${send.getAttribute('aria-label') || ''} ${send.textContent || ''}`);
   const idleComposer = Boolean(composer && send && !stopVariant && !activeStop);
   const text = after.map(el => {
     if (el.closest(reasoningSelector)) return '';
+    if (tailFallback) return liveText(el);
     const blocks = [...(el.matches(markdownSelector) ? [el] : el.querySelectorAll(markdownSelector))]
       .filter(block => !block.closest(reasoningSelector));
     const outerBlocks = blocks.filter(block => !blocks.some(other => other !== block && other.contains(block)));

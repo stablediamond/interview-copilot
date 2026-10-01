@@ -161,6 +161,30 @@ async function run() {
     assert.equal(track(snapshot)?.text, 'Fresh answer text');
   });
 
+  await test('fallback ignores ChatGPT status notices and waits until the responding notice ends', async () => {
+    const expectedPrompt = 'Tell me about yourself.';
+    await reset('<main><div id="thread"><div class="turn"><div class="bubble">Old prompt</div></div></div></main><div id="prompt-textarea" contenteditable="true"></div>');
+    const baseline = await sample({ expectedPrompt });
+    const track = createAnswerTracker(baseline);
+    await evaluate(prompt => {
+      document.getElementById('thread').insertAdjacentHTML('beforeend',
+        `<div class="turn"><div class="bubble">${prompt}</div></div><div class="turn" id="reply"><h4 class="sr-only">Latest response</h4><div aria-live="polite">ChatGPT is responding</div><div>ChatGPT can make mistakes. Check important info.</div></div>`);
+    }, expectedPrompt);
+    let snapshot = await sample({ expectedPrompt });
+    assert.equal(snapshot.text, '', 'Status text is not an answer');
+    assert.equal(snapshot.busy, true);
+    assert.equal(track(snapshot), null);
+    await evaluate(() => {
+      document.getElementById('reply').innerHTML = '<h4 class="sr-only">Latest response</h4><div><p>First paragraph.</p><p>Second paragraph.</p></div><div>ChatGPT can make mistakes. Check important info.</div>';
+    });
+    snapshot = await sample({ expectedPrompt });
+    assert.equal(snapshot.text, 'First paragraph.\nSecond paragraph.');
+    assert.equal(snapshot.busy, false);
+    assert.equal(track(snapshot)?.done, false);
+    now += 2500;
+    assert.deepEqual(track(await sample({ expectedPrompt })), { text: 'First paragraph.\nSecond paragraph.', revision: 3, done: true });
+  });
+
   await test('missing answer reports a text-free layout outline', async () => {
     const expectedPrompt = 'A prompt without any answer yet.';
     await reset('<main><div id="thread"><div class="turn"><div class="bubble">A prompt without any answer yet.</div></div><div class="turn"><div class="spacer"></div></div></div></main>');

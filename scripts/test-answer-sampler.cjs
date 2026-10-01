@@ -221,7 +221,7 @@ function runFixtures(readAnswer, createTracker) {
     document.querySelector('[data-testid="stop-button"]').remove();
     now += 500;
     equal(track(readAnswer()), null, 'The idle confirmation period restarts');
-    now += 2400;
+    now += 400;
     equal(track(readAnswer()), null, 'The restarted idle period is still short');
     now += 200;
     equal(track(readAnswer())?.done, true, 'Continuous idle completes the response');
