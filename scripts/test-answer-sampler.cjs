@@ -48,6 +48,119 @@ function runFixtures(readAnswer, createTracker) {
     equal(snapshot.text, 'Answer from article layout', 'Answer turn text');
   });
 
+  test('captures zero-role-attribute layouts by conversation headings and labels', () => {
+    const baseline = readAnswer();
+    const track = createTracker(baseline);
+    append('<main><article><h5>You said:</h5><div>Question with no role attributes</div></article><div role="article"><h6>ChatGPT said:</h6><div class="markdown">Answer found through semantic headings</div><button data-testid="copy-turn-action-button">Copy</button></div></main>');
+    equal(document.querySelectorAll('[data-message-author-role], [data-turn]').length, 0, 'Previously recognized role attributes are absent');
+    const snapshot = readAnswer();
+    equal(snapshot.userCount, 1, 'Semantic user is recognized');
+    equal(snapshot.assistantCount, 1, 'Semantic assistant is recognized');
+    equal(snapshot.roleSource, 'semantic', 'The structural fallback is reported');
+    equal(track(snapshot)?.text, 'Answer found through semantic headings', 'Capture emits the answer');
+    now += 3000;
+    equal(track(readAnswer())?.done, true, 'The semantic response completes');
+    document.body.innerHTML = '<main><div role="article" aria-label="You said:"><p>Labelled question</p></div><div class="agent-turn" aria-label="ChatGPT said:"><p>Labelled plain text answer</p></div></main>';
+    equal(readAnswer().text, 'Labelled plain text answer', 'Accessible turn labels also identify an answer');
+  });
+
+  test('captures a submitted prompt and following answer with no turn metadata', () => {
+    const expectedPrompt = 'Explain how to diagnose a slow application request and measure the improvement safely.';
+    document.body.innerHTML = '<main><div class="markdown">An older answer must stay private</div></main><div class="ProseMirror" contenteditable="true"></div><button aria-label="Send message">Send</button>';
+    const options = { expectedPrompt };
+    const track = createTracker(readAnswer(options));
+    document.querySelector('main').insertAdjacentHTML('beforeend', `<section><p>${expectedPrompt}</p></section><section><div class="markdown"><p>Measure each dependency first.</p><p>Compare latency percentiles.</p></div></section>`);
+    const snapshot = readAnswer(options);
+    equal(snapshot.roleSource, 'prompt-anchor', 'Submitted text identifies the turn');
+    equal(snapshot.userCount, 1, 'Prompt anchor user count');
+    equal(snapshot.assistantCount, 1, 'Only the following answer is considered');
+    ok(snapshot.composerFound && snapshot.idleComposer, 'Alternate composer and send layouts match submission');
+    const first = track(snapshot);
+    ok(first?.text.includes('Measure each dependency first.'), 'The rendered answer is emitted');
+    ok(!first.text.includes('older answer'), 'Prior answer is excluded');
+    now += 3000;
+    equal(track(readAnswer(options))?.done, true, 'Prompt fallback completion is detected');
+  });
+
+  test('prompt fallback supports normalized text and a distinctive collapsed prefix', () => {
+    const expectedPrompt = 'Describe a reliable deployment strategy that includes database migration compatibility, health checks, and rollback planning for a distributed service.';
+    document.body.innerHTML = `<main><section><p>${expectedPrompt.slice(0, 95)}…</p></section><div class="prose">Expand gradually after health checks pass.</div></main>`;
+    equal(readAnswer({ expectedPrompt }).text, 'Expand gradually after health checks pass.', 'A sufficiently long collapsed prompt is recognized');
+    document.body.innerHTML = '<main><p>Explain   this\n  result.</p><div class="prose">Normalized response.</div></main>';
+    equal(readAnswer({ expectedPrompt: 'Explain this result.' }).text, 'Normalized response.', 'An exact short prompt supports whitespace normalization');
+    document.body.innerHTML = '<main><p>Explain this…</p><div class="prose">Unrelated response.</div></main>';
+    equal(readAnswer({ expectedPrompt: 'Explain this result.' }).text, '', 'A short ambiguous prefix is rejected');
+  });
+
+  test('prompt anchors support semantic assistant headings and keep identity through rerender', () => {
+    const options = { expectedPrompt: 'Explain this mixed layout.' };
+    document.body.innerHTML = '<main><article data-turn="user">A previous question</article><article data-turn="assistant"><div class="markdown">A previous answer</div></article></main>';
+    const track = createTracker(readAnswer(options));
+    document.querySelector('main').insertAdjacentHTML('beforeend', '<section class="new-question"><p>Explain this mixed layout.</p></section><article><h6>ChatGPT said:</h6><div class="markdown">Mixed layout answer.</div><button data-testid="copy-turn-action-button">Copy</button></article>');
+    equal(track(readAnswer(options))?.text, 'Mixed layout answer.', 'An unmarked question supports a semantic assistant after older explicit turns');
+    document.querySelector('.new-question').innerHTML = '<p>Explain this mixed layout.</p>';
+    now += 3000;
+    equal(track(readAnswer(options))?.done, true, 'A recreated prompt anchor retains its submission identity');
+  });
+
+  test('prompt anchor identity survives role attributes arriving with a replaced user node', () => {
+    const options = { expectedPrompt: 'Describe the migration process.' };
+    document.body.innerHTML = '<main></main>';
+    const track = createTracker(readAnswer(options));
+    document.querySelector('main').innerHTML = '<section class="pending"><p>Describe the migration process.</p></section><div class="markdown">Growing answer.</div><button data-testid="stop-button">Stop</button>';
+    equal(track(readAnswer(options))?.text, 'Growing answer.', 'Initial unannotated answer is captured');
+    document.querySelector('.pending').outerHTML = '<article data-message-author-role="user"><h5>You said:</h5><p>Describe the migration process.</p></article>';
+    document.querySelector('.markdown').outerHTML = '<article data-message-author-role="assistant"><div class="markdown">Completed migration answer.</div><button data-testid="copy-turn-action-button">Copy</button></article>';
+    document.querySelector('[data-testid="stop-button"]').remove();
+    equal(track(readAnswer(options))?.text, 'Completed migration answer.', 'Annotated replacement remains bound to this submission');
+    now += 3000;
+    equal(track(readAnswer(options))?.done, true, 'The promoted turn completes');
+    const unrelated = createTracker({ userKeys: [] });
+    unrelated(readAnswer(options));
+    document.querySelector('[data-message-author-role="user"]').innerHTML = '<p>A different question.</p>';
+    // The real turn node remains the same here, so check the alias itself:
+    ok(!readAnswer(options).userKeys.some(key => key.startsWith('prompt-position:')), 'Unrelated prompt text does not earn a submission alias');
+  });
+
+  test('prompt fallback excludes composer, sidebar, dialog, and unrelated content', () => {
+    const options = { expectedPrompt: 'The submitted prompt' };
+    document.body.innerHTML = '<aside><p>The submitted prompt</p><div class="markdown">Sidebar answer</div></aside><main><div class="markdown">Existing answer</div><nav><p>The submitted prompt</p><div class="prose">Navigation content</div></nav><div role="dialog"><p>The submitted prompt</p><div class="prose">Dialog answer</div></div><form><div contenteditable="true" role="textbox">The submitted prompt</div><div class="prose">Composer content</div></form></main>';
+    let snapshot = readAnswer(options);
+    equal(snapshot.userCount, 0, 'Copies outside the conversation do not establish a user turn');
+    equal(snapshot.text, '', 'Unrelated content is never an answer');
+    document.querySelector('main').insertAdjacentHTML('beforeend', '<section><p>The submitted prompt</p></section><div class="prose">Intended answer</div><section><p>A later unrelated question</p></section><div class="markdown">A later unrelated answer</div>');
+    snapshot = readAnswer(options);
+    equal(snapshot.text, 'Intended answer', 'An intervening question stops answer collection');
+    document.body.innerHTML = '<p>The submitted prompt</p><div class="markdown">Unscoped page text</div>';
+    equal(readAnswer(options).text, '', 'There is no whole-body prompt fallback');
+  });
+
+  test('prompt fallback does not reimport a baseline response or mistake answer echoes for users', () => {
+    const options = { expectedPrompt: 'Repeat this question' };
+    document.body.innerHTML = '<main><p>Repeat this question</p><div class="markdown"><p>Repeat this question</p><p>The existing answer.</p></div></main>';
+    const snapshot = readAnswer(options);
+    equal(snapshot.userCount, 1, 'Prompt echoes in markdown do not become new users');
+    equal(createTracker(snapshot)(readAnswer(options)), null, 'The baseline response is not emitted');
+    document.body.innerHTML = '<main><article><h5>You said:</h5><p>A previous question</p></article><article><h6>ChatGPT said:</h6><p>Repeat this question</p></article></main>';
+    const semantic = readAnswer(options);
+    equal(semantic.roleSource, 'semantic', 'A semantic assistant quoting a prompt does not become a prompt anchor');
+    equal(semantic.userCount, 1, 'The previous user is still the only user');
+  });
+
+  test('zero-match diagnostics reveal document structure without message content', () => {
+    document.body.innerHTML = '<main><section><p>Unrecognized private text</p></section><div class="prose">Unrecognized answer</div></main><iframe></iframe><div contenteditable="true" data-lexical-editor="true"></div><button id="composer-submit-button">Send</button>';
+    const snapshot = readAnswer();
+    equal(snapshot.userCount, 0, 'Missing user remains missing without a submitted prompt');
+    equal(snapshot.text, '', 'Diagnostics do not enable arbitrary text capture');
+    equal(snapshot.roleSource, 'none', 'No role recognition is reported honestly');
+    equal(snapshot.markdowns, 1, 'Rendered markdown is counted');
+    equal(snapshot.frames, 1, 'Frame count is available');
+    ok(snapshot.bodyElements > 0 && typeof snapshot.readyState === 'string', 'Document structure is available');
+    ok(snapshot.composerFound, 'Alternative composer is found');
+    const metadata = { composerFound: snapshot.composerFound, articles: snapshot.articles, markdowns: snapshot.markdowns, bodyElements: snapshot.bodyElements, readyState: snapshot.readyState, frames: snapshot.frames, roleSource: snapshot.roleSource };
+    ok(!JSON.stringify(metadata).includes('private'), 'Metadata contains no conversation text');
+  });
+
   test('keeps the submitted turn when its provisional ID is assigned and node is replaced', () => {
     const track = createTracker(seed());
     append(user(2, 'New question', ''));
@@ -83,6 +196,15 @@ function runFixtures(readAnswer, createTracker) {
     equal(track(snapshot)?.done, false, 'First text update remains streaming');
     now += 10000;
     equal(track(readAnswer()), null, 'Stable text during active generation is not terminal');
+  });
+
+  test('the generic composer submit button does not imply idle while it means Stop', () => {
+    seed();
+    append(user(2, 'New question') + assistant(3, 'Still generating'));
+    append('<div class="ProseMirror" contenteditable="true"></div><button id="composer-submit-button" aria-label="Stop">Stop</button>');
+    const snapshot = readAnswer();
+    ok(snapshot.activeStop, 'The generic composer button can be an active Stop control');
+    equal(snapshot.idleComposer, false, 'Stop is not treated as an idle Send composer');
   });
 
   test('requires a continuous idle period after generation actually stops', () => {

@@ -1323,7 +1323,8 @@ async function clickChatgptSend(needle) {
   }
 
   const composer = pick(composerSelectors);
-  if (composer) {
+  const value = String(composer?.innerText || composer?.value || "");
+  if (composer && want && value.includes(want)) {
     composer.dispatchEvent(
       new KeyboardEvent("keydown", {
         key: "Enter",
@@ -1331,10 +1332,18 @@ async function clickChatgptSend(needle) {
         keyCode: 13,
         which: 13,
         bubbles: true,
+        cancelable: true,
       })
     );
+    // An untrusted keyboard event can be ignored. Do not create a permanent
+    // Generating card unless ChatGPT actually consumes the submitted prompt.
+    for (let i = 0; i < 50; i++) {
+      await new Promise(resolve => setTimeout(resolve, 40));
+      const current = pick(composerSelectors);
+      if (current && !String(current.innerText || current.value || "").trim()) return { ok: true };
+    }
   }
-  return { ok: true };
+  return { ok: false, error: "ChatGPT did not confirm prompt submission. Check the GPT tab before trying again." };
 }
 
 function sendChatgptKey(type, keyCode, modifiers) {
@@ -1375,20 +1384,27 @@ function emitSharedAnswer(options, update) {
   while (sharedAnswerUpdates.size > 20) sharedAnswerUpdates.delete(sharedAnswerUpdates.keys().next().value);
   if (mainWindow && !mainWindow.webContents.isDestroyed()) mainWindow.webContents.send("chatgpt-answer", payload);
 }
-async function sampleChatgptAnswer(wc) {
+// Read in our own JS world: page scripts must not change DOM query methods or
+// overwrite the capture state. The world still sees the same rendered document.
+const CHATGPT_CAPTURE_WORLD = 1004;
+async function sampleChatgptAnswer(wc, expectedPrompt = "") {
   let timeout;
   try {
     return await Promise.race([
-      wc.executeJavaScript(`(${readChatgptAnswer})()`),
+      wc.executeJavaScriptInIsolatedWorld(CHATGPT_CAPTURE_WORLD, [{
+        code: `(${readChatgptAnswer})(${JSON.stringify({ expectedPrompt })})`,
+      }]),
       new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("The GPT page did not respond to answer capture within 10 seconds.")), 10_000); }),
     ]);
   } finally { clearTimeout(timeout); }
 }
-function streamChatgptAnswer(wc, options, baseline) {
+function streamChatgptAnswer(wc, options, baseline, expectedPrompt = "") {
   sharedAnswerActive = true;
   const track = createAnswerTracker(baseline);
-  let conversationPath = new URL(wc.getURL()).pathname;
+  let capturePage = new URL(wc.getURL());
+  let conversationPath = capturePage.pathname;
   if (!conversationPath.startsWith("/c/")) conversationPath = null;
+  const webContentsId = wc.id;
   const started = Date.now();
   let latest = { text: "", revision: 1, done: false };
   const accountVersion = sharedAnswerAccountVersion;
@@ -1401,6 +1417,14 @@ function streamChatgptAnswer(wc, options, baseline) {
     activeStop: Boolean(sample?.activeStop), markedStreaming: Boolean(sample?.markedStreaming),
     complete: Boolean(sample?.complete), idleComposer: Boolean(sample?.idleComposer),
     revision: latest.revision,
+    webContentsId, readWorld: "isolated",
+    pageOrigin: capturePage.origin,
+    // Log layout/route categories, never conversation IDs, queries or page text.
+    pageRoute: capturePage.pathname.replace(/\/(c|g)\/[^/]+/g, "/$1/:id"),
+    composerFound: Boolean(sample?.composerFound),
+    articles: sample?.articles ?? 0, markdowns: sample?.markdowns ?? 0,
+    bodyElements: sample?.bodyElements ?? 0, readyState: sample?.readyState ?? "unknown",
+    frames: sample?.frames ?? 0, roleSource: sample?.roleSource ?? "unknown",
   });
   log("GPT answer capture started", options.streamId, "baseline users:", baseline.userCount, "assistants:", baseline.assistantCount);
   emit(latest);
@@ -1412,10 +1436,11 @@ function streamChatgptAnswer(wc, options, baseline) {
         ? "GPT text was captured, but completion could not be confirmed."
         : "No new GPT answer was detected. The GPT page structure may have changed.");
       const url = new URL(wc.getURL());
+      capturePage = url;
       if (url.hostname !== "chatgpt.com" && !url.hostname.endsWith(".chatgpt.com")) throw new Error("ChatGPT navigated away.");
       if (conversationPath && url.pathname !== conversationPath) throw new Error("ChatGPT switched conversations before capture finished.");
       if (!conversationPath && url.pathname.startsWith("/c/")) conversationPath = url.pathname;
-      sample = await sampleChatgptAnswer(wc);
+      sample = await sampleChatgptAnswer(wc, expectedPrompt);
       const update = track(sample);
       if (update) { latest = update; emit(update); }
       const state = track.status();
@@ -1450,7 +1475,7 @@ ipcMain.handle("chatgpt:submit", async (_e, raw, streamOptions) => {
   }
   try {
     const sharing = streamOptions && /^[\w-]{1,80}$/.test(streamOptions.streamId || "") && /^[\w-]{1,200}$/.test(streamOptions.eventId || "");
-    const baseline = sharing ? await sampleChatgptAnswer(chatgptView.webContents) : null;
+    const baseline = sharing ? await sampleChatgptAnswer(chatgptView.webContents, text) : null;
     if (baseline?.activeStop || (baseline?.busy && !baseline?.idleComposer)) return { ok: false, error: "Wait for ChatGPT to finish the current answer." };
     const focused = await chatgptView.webContents.executeJavaScript(
       `(${focusChatgptComposer})()`,
@@ -1471,7 +1496,7 @@ ipcMain.handle("chatgpt:submit", async (_e, raw, streamOptions) => {
       `(${clickChatgptSend})(${JSON.stringify(needle)})`,
       true
     );
-    if (result?.ok && baseline) streamChatgptAnswer(chatgptView.webContents, { streamId: streamOptions.streamId, eventId: streamOptions.eventId }, baseline);
+    if (result?.ok && baseline) streamChatgptAnswer(chatgptView.webContents, { streamId: streamOptions.streamId, eventId: streamOptions.eventId }, baseline, text);
     if (result && typeof result === "object") return result;
     return { ok: true };
   } catch (err) {

@@ -1,17 +1,101 @@
 // Serialized into the ChatGPT guest. Keep this self-contained: no Node APIs or
 // closure dependencies are available inside the embedded browser.
-function readChatgptAnswer() {
-  const turnSelector = 'article, [data-testid^="conversation-turn"], [data-turn-id]';
+function readChatgptAnswer(options = {}) {
+  const turnSelector = 'article, [role="article"], [data-testid^="conversation-turn"], [data-turn-id], .agent-turn';
+  const markdownSelector = '.markdown, .prose, [class*="markdown"]';
+  const excludedSelector = 'form, textarea, input, [contenteditable="true"], #prompt-textarea, [data-testid="prompt-textarea"], [data-testid="composer"], nav, aside, [role="navigation"], [role="complementary"], dialog, [role="dialog"], script, style';
+  const reasoningSelector = '[data-testid*="reasoning"], [data-message-type="reasoning"], [data-message-type="analysis"], [data-message-type="thought"], [class*="reasoning"], [aria-label*="Reasoning"]';
+  const scopeSelector = 'main, [role="main"], [data-testid="conversation"], [data-testid="conversation-container"], #thread';
+  const normalize = value => String(value || '').replace(/\s+/g, ' ').trim();
+  const allowed = el => !el.closest(excludedSelector);
+  const roleLabel = value => {
+    const label = normalize(value).replace(/:$/, '').toLowerCase();
+    if (/^(you(?: said)?|user(?: said)?|your message)$/.test(label)) return 'user';
+    if (/^(chatgpt(?: said)?|assistant(?: said)?)$/.test(label)) return 'assistant';
+    return '';
+  };
+  const turns = [...document.querySelectorAll(turnSelector)].filter(allowed);
+  const semanticRole = el => {
+    const label = roleLabel(el.getAttribute('aria-label'));
+    if (label) return label;
+    for (const heading of el.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]')) {
+      if (heading.closest(turnSelector) !== el || heading.closest(`${markdownSelector}, ${reasoningSelector}`)) continue;
+      const role = roleLabel(heading.textContent);
+      if (role) return role;
+    }
+    return '';
+  };
+  let roleSource = 'none';
+  let foundAttributeRoles = false, foundSemanticRoles = false;
   const collect = role => {
-    const roots = [...document.querySelectorAll(`[data-message-author-role="${role}"], [data-turn="${role}"]`)];
+    const explicit = [...document.querySelectorAll(`[data-message-author-role="${role}"], [data-turn="${role}"]`)].filter(allowed);
+    const semantic = turns.filter(el => semanticRole(el) === role && !explicit.some(other => el.contains(other) || other.contains(el)));
+    foundAttributeRoles ||= explicit.length > 0;
+    foundSemanticRoles ||= semantic.length > 0;
+    roleSource = foundAttributeRoles && foundSemanticRoles ? 'mixed' : foundSemanticRoles ? 'semantic' : foundAttributeRoles ? 'attributes' : 'none';
+    const roots = [...explicit, ...semantic].sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & 4 ? -1 : 1);
     // Newer layouts put the role on the article; older ones put it on a child.
     // Use the child when both exist, so headings/actions are never answer text.
     return roots.filter(el => !roots.some(other => other !== el && el.contains(other)));
   };
-  const users = collect('user');
-  const assistants = collect('assistant');
-  const user = users.at(-1);
-  const after = assistants.filter(el => user && (user.compareDocumentPosition(el) & 4));
+  let users = collect('user');
+  let assistants = collect('assistant');
+  let user = users.at(-1);
+  let promptScope = null;
+  // Some layouts omit all role attributes. Bind to the submitted prompt inside
+  // the conversation, never to a copy in the composer/sidebar or a whole page.
+  const expectedPrompt = normalize(options.expectedPrompt);
+  const matchesPrompt = value => expectedPrompt && (value === expectedPrompt || (expectedPrompt.length >= 80 && value.length >= 80 && value.length <= expectedPrompt.length + 4 && value.startsWith(expectedPrompt.slice(0, 80))));
+  if (expectedPrompt) {
+    const scopes = [...document.querySelectorAll(scopeSelector)].filter(allowed);
+    const matches = [];
+    for (const scope of scopes) {
+      const candidates = [...scope.querySelectorAll('div, p, span, section, article, [role="article"]')].filter(el => {
+        if (!allowed(el) || el.closest(`${markdownSelector}, ${reasoningSelector}`)) return false;
+        if (el.querySelector(excludedSelector)) return false;
+        if (users.some(message => message.contains(el) || el.contains(message))) return false;
+        if (assistants.some(message => message.contains(el) || el.contains(message))) return false;
+        if (user && !(user.compareDocumentPosition(el) & 4)) return false;
+        const value = normalize(el.textContent);
+        // Exact matching also supports short questions. A truncated long prompt
+        // must retain a distinctive prefix, without absorbing the answer below.
+        return matchesPrompt(value);
+      });
+      for (const el of candidates) {
+        if (!candidates.some(other => other !== el && el.contains(other)) && !matches.includes(el)) matches.push(el);
+      }
+    }
+    matches.sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & 4 ? -1 : 1);
+    const anchor = matches.at(-1);
+    if (anchor) {
+      user = anchor;
+      users = [...users, ...matches];
+      promptScope = user.closest(scopeSelector);
+      roleSource = 'prompt-anchor';
+    }
+  }
+  const conversationScope = promptScope || user?.closest(scopeSelector);
+  let after = assistants.filter(el => user && (user.compareDocumentPosition(el) & 4) && (!conversationScope || conversationScope.contains(el)));
+  if (promptScope) {
+    const following = [...promptScope.querySelectorAll(markdownSelector)].filter(el => allowed(el) && !el.closest(reasoningSelector) && !el.contains(user) && (user.compareDocumentPosition(el) & 4));
+    const blocks = following.filter(el => !following.some(other => other !== el && other.contains(el)));
+    after = [];
+    let preceding = user;
+    for (const block of blocks) {
+      const gap = document.createRange();
+      gap.setStartAfter(preceding);
+      gap.setEndBefore(block);
+      const between = gap.cloneContents();
+      between.querySelectorAll(`button, ${excludedSelector}, ${reasoningSelector}`).forEach(el => el.remove());
+      between.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]').forEach(el => { if (roleLabel(el.textContent) === 'assistant') el.remove(); });
+      // A later question creates a text boundary. Do not attach its answer to
+      // this submission merely because it also occurs after our prompt.
+      if (normalize(between.textContent)) break;
+      after.push(block);
+      preceding = block;
+    }
+    assistants = after;
+  }
   const assistant = after.at(-1);
   const turn = assistant?.closest(turnSelector) || assistant;
 
@@ -35,37 +119,49 @@ function readChatgptAnswer() {
       nodeKey(el), nodeKey(container)].filter(Boolean);
   };
   const userKeys = keys(user);
+  if (conversationScope && expectedPrompt && user) {
+    const copy = user.cloneNode(true);
+    copy.querySelectorAll(`button, ${excludedSelector}`).forEach(el => el.remove());
+    copy.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]').forEach(el => { if (roleLabel(el.textContent) === 'user') el.remove(); });
+    // Keep this alias when React replaces an unannotated prompt with its final
+    // role-marked element. Only the matching submitted prompt earns the alias.
+    if (promptScope || matchesPrompt(normalize(copy.textContent))) userKeys.push(`prompt-position:${nodeKey(conversationScope)}:${users.length}`);
+  }
   const visible = el => {
     if (!el || el.hidden || el.closest('[hidden], [aria-hidden="true"]')) return false;
     const style = window.getComputedStyle(el);
     return style.display !== 'none' && style.visibility !== 'hidden' && el.getClientRects().length > 0;
   };
   const enabled = el => !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-  const activeStop = [...document.querySelectorAll('[data-testid="stop-button"], button[aria-label="Stop streaming"], button[aria-label="Stop generating"], button[aria-label="Stop response"]')]
+  const activeStop = [...document.querySelectorAll('[data-testid="stop-button"], button[aria-label="Stop streaming"], button[aria-label="Stop generating"], button[aria-label="Stop response"], #composer-submit-button')]
+    .filter(el => el.id !== 'composer-submit-button' || /stop/i.test(`${el.getAttribute('data-testid') || ''} ${el.getAttribute('aria-label') || ''} ${el.textContent || ''}`))
     .some(el => visible(el) && enabled(el));
   // These actions are often hidden until hover (or while the GPT tab is hidden).
   // Their presence in THIS answer's turn is a completion signal; visibility is not.
   const completionSelector = '[data-testid="copy-turn-action-button"], [data-testid="good-response-turn-action-button"], [data-testid="bad-response-turn-action-button"]';
   const hasCompletionActions = [...(turn?.querySelectorAll(completionSelector) || [])].some(enabled);
   const markedStreaming = Boolean(assistant?.closest('[data-is-streaming="true"]') || turn?.querySelector('[data-is-streaming="true"], .result-streaming'));
-  const composer = document.querySelector('#prompt-textarea, [data-testid="composer"] textarea');
-  const idleComposer = Boolean(composer && document.querySelector('[data-testid="send-button"], #composer-submit-button[data-testid="send-button"], button[aria-label="Send prompt"]'));
-  const reasoningSelector = '[data-testid*="reasoning"], [data-message-type="reasoning"], [data-message-type="analysis"], [data-message-type="thought"], [class*="reasoning"], [aria-label*="Reasoning"]';
+  const composer = document.querySelector('#prompt-textarea, [data-testid="prompt-textarea"], [data-testid="composer"] textarea, [contenteditable="true"][data-lexical-editor="true"], div.ProseMirror[contenteditable="true"], [contenteditable="true"][role="textbox"]');
+  const send = document.querySelector('button[data-testid="send-button"], #composer-submit-button, button[aria-label="Send prompt"], button[aria-label="Send message"]');
+  const stopVariant = send && /stop/i.test(`${send.getAttribute('data-testid') || ''} ${send.getAttribute('aria-label') || ''} ${send.textContent || ''}`);
+  const idleComposer = Boolean(composer && send && !stopVariant && !activeStop);
   const text = after.map(el => {
     if (el.closest(reasoningSelector)) return '';
-    const blocks = [...el.querySelectorAll('.markdown, .prose, [class*="markdown"]')]
+    const blocks = [...(el.matches(markdownSelector) ? [el] : el.querySelectorAll(markdownSelector))]
       .filter(block => !block.closest(reasoningSelector));
     const outerBlocks = blocks.filter(block => !blocks.some(other => other !== block && other.contains(block)));
     if (outerBlocks.length) return outerBlocks.map(block => {
-      if (!block.querySelector(reasoningSelector)) return String(block.innerText || block.textContent || '').trim();
+      const nonAnswerSelector = `button, ${excludedSelector}, ${reasoningSelector}`;
+      if (!block.querySelector(nonAnswerSelector)) return String(block.innerText || block.textContent || '').trim();
       const copy = block.cloneNode(true);
-      copy.querySelectorAll(reasoningSelector).forEach(node => node.remove());
+      copy.querySelectorAll(nonAnswerSelector).forEach(node => node.remove());
       return String(copy.innerText || copy.textContent || '').trim();
     }).join('\n\n');
     // A turn-level fallback includes headings and controls; strip those before
     // extracting plain text. Never copy the enclosing conversation or prompt.
     const copy = el.cloneNode(true);
-    copy.querySelectorAll(`button, h5, h6, ${reasoningSelector}`).forEach(node => node.remove());
+    copy.querySelectorAll(`button, ${excludedSelector}, ${reasoningSelector}`).forEach(node => node.remove());
+    copy.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]').forEach(node => { if (roleLabel(node.textContent)) node.remove(); });
     return String(copy.innerText || copy.textContent || '').trim();
   }).filter(Boolean).join('\n\n').slice(0, 100000);
   return {
@@ -81,6 +177,13 @@ function readChatgptAnswer() {
     idleComposer,
     busy: activeStop || (markedStreaming && !hasCompletionActions),
     complete: hasCompletionActions && !activeStop,
+    composerFound: Boolean(composer),
+    articles: turns.length,
+    markdowns: document.querySelectorAll(markdownSelector).length,
+    bodyElements: document.body?.querySelectorAll('*').length || 0,
+    readyState: document.readyState,
+    frames: document.querySelectorAll('iframe, frame').length,
+    roleSource,
   };
 }
 function createAnswerTracker(baseline, now = Date.now()) {

@@ -29,7 +29,7 @@ async function main() {
   }
   const baseline = { userCount: 1, userKey: 'old', userKeys: ['old'] };
   let sample = { userCount: 2, userKey: 'temporary', userKeys: ['temporary', 'turn2'], afterUser: false, text: '' };
-  const wc = { isDestroyed: () => false, getURL: () => 'https://chatgpt.com/c/test', executeJavaScript: async () => sample };
+  const wc = { isDestroyed: () => false, getURL: () => 'https://chatgpt.com/c/test', executeJavaScriptInIsolatedWorld: async (world, scripts) => { assert.equal(world, 1004); assert.ok(scripts[0].code.includes('expectedPrompt')); return sample; } };
   context.capture(wc, { eventId: 'event1', streamId: 'stream1' }, baseline);
   await nextTimer();
   sample = { ...sample, userKey: 'persisted', userKeys: ['persisted', 'turn2'], afterUser: true, text: 'Growing', busy: true, activeStop: true };
@@ -45,7 +45,7 @@ async function main() {
   assert.ok(logs.some(line => line.includes('confirming-completion')));
   assert.ok(!logs.some(line => line.includes('Final answer') || line.includes('Growing')), 'Diagnostics must not log answers');
 
-  context.capture({ ...wc, executeJavaScript: () => new Promise(() => {}) }, { eventId: 'event1', streamId: 'hung' }, baseline);
+  context.capture({ ...wc, executeJavaScriptInIsolatedWorld: () => new Promise(() => {}) }, { eventId: 'event1', streamId: 'hung' }, baseline);
   const pending = nextTimer();
   await nextTimer();
   await pending;
