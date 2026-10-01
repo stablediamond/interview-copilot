@@ -250,6 +250,8 @@ Positioning Brief appears above the GPT and Record & Answer workspace in the GPT
 
 Deploy the accompanying Job Track bearer-token support for `/api/event-sessions/{eventId}` and ensure migration `0020_event_sessions.sql` is applied. The desktop app forwards its signed-in user's token through a local proxy; tokens are never put in URLs. Run `node scripts/test-shared-session.cjs` to check the proxy contract.
 
+Shared sessions use live Server-Sent Events: Job Track serves `/api/event-sessions/{eventId}/stream` (deploy the latest Job Track), the desktop app passes it through `/api/calendar/shared-session/stream`, and viewers receive each GPT answer delta as it is saved. GPT answers are posted immediately (no polling delay, newest revision wins while a post is in flight). If the stream is unavailable the session falls back to polling and shows "Connected · polling for updates". Run `node scripts/test-session-stream.cjs` and `node scripts/test-answer-replay.cjs` to check the client side.
+
 
 ### Live GPT answer sharing
 

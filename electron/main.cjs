@@ -1371,6 +1371,7 @@ function pastePlainIntoChatgpt() {
 }
 
 const { readChatgptAnswer, createAnswerTracker } = require("./chatgpt-answer-stream.cjs");
+const { createChatgptStreamCapture } = require("./chatgpt-stream-capture.cjs");
 let sharedAnswerActive = false;
 let chatgptSubmitActive = false;
 // Keep the latest revision available while a Session page reloads or unmounts.
@@ -1398,7 +1399,7 @@ async function sampleChatgptAnswer(wc, expectedPrompt = "") {
     ]);
   } finally { clearTimeout(timeout); }
 }
-function streamChatgptAnswer(wc, options, baseline, expectedPrompt = "") {
+function streamChatgptAnswer(wc, options, baseline, expectedPrompt = "", streamCapture = null) {
   sharedAnswerActive = true;
   const track = createAnswerTracker(baseline);
   let capturePage = new URL(wc.getURL());
@@ -1409,6 +1410,15 @@ function streamChatgptAnswer(wc, options, baseline, expectedPrompt = "") {
   let latest = { text: "", revision: 1, done: false };
   const accountVersion = sharedAnswerAccountVersion;
   const emit = (update) => { if (accountVersion === sharedAnswerAccountVersion) emitSharedAnswer(options, update); };
+  // The network stream is the primary source; DOM sampling is the fallback.
+  // Both publish through here so revisions stay strictly increasing.
+  let usingStream = false, streamFinal = false, streamEvents = 0;
+  const publish = (text, done) => {
+    if (text === latest.text && done === latest.done) return;
+    latest = { text, revision: latest.revision + 1, done };
+    emit(latest);
+  };
+  const stopStream = () => { try { streamCapture?.stop(); } catch { /* already stopped */ } };
   let lastDiagnostic = "", lastLog = 0, sample = null;
   const diagnostics = () => ({
     state: track.status(), elapsedMs: Date.now() - started,
@@ -1417,6 +1427,7 @@ function streamChatgptAnswer(wc, options, baseline, expectedPrompt = "") {
     activeStop: Boolean(sample?.activeStop), markedStreaming: Boolean(sample?.markedStreaming),
     complete: Boolean(sample?.complete), idleComposer: Boolean(sample?.idleComposer),
     revision: latest.revision,
+    source: usingStream ? "stream" : "dom", streamEvents,
     webContentsId, readWorld: "isolated",
     pageOrigin: capturePage.origin,
     // Log layout/route categories, never conversation IDs, queries or page text.
@@ -1432,8 +1443,32 @@ function streamChatgptAnswer(wc, options, baseline, expectedPrompt = "") {
   });
   log("GPT answer capture started", options.streamId, "baseline users:", baseline.userCount, "assistants:", baseline.assistantCount);
   emit(latest);
+  if (streamCapture) {
+    streamCapture.subscribe((update) => {
+      if (streamFinal) return;
+      streamEvents = update.events;
+      if (update.text) usingStream = true;
+      if (!usingStream) return;
+      if (update.failed && !update.done) {
+        // Stream broke mid-answer: let DOM capture finish the answer.
+        usingStream = false;
+        log("GPT stream capture failed, using page capture", options.streamId, update.error);
+        stopStream();
+        return;
+      }
+      if (update.done) {
+        streamFinal = true; sharedAnswerActive = false;
+        publish(update.text, true);
+        log("GPT answer captured from stream", options.streamId, JSON.stringify({ events: update.events, chars: update.text.length, elapsedMs: Date.now() - started }));
+        stopStream();
+        return;
+      }
+      publish(update.text, false);
+    });
+  }
   async function tick() {
     try {
+      if (streamFinal) return;
       if (accountVersion !== sharedAnswerAccountVersion) throw new Error("The signed-in account changed during answer capture.");
       if (wc.isDestroyed()) throw new Error("The GPT view was closed before capture finished.");
       if (Date.now() - started > 10 * 60_000) throw new Error(latest.text
@@ -1444,18 +1479,20 @@ function streamChatgptAnswer(wc, options, baseline, expectedPrompt = "") {
       if (url.hostname !== "chatgpt.com" && !url.hostname.endsWith(".chatgpt.com")) throw new Error("ChatGPT navigated away.");
       if (conversationPath && url.pathname !== conversationPath) throw new Error("ChatGPT switched conversations before capture finished.");
       if (!conversationPath && url.pathname.startsWith("/c/")) conversationPath = url.pathname;
+      if (usingStream) { setTimeout(tick, 350); return; }
       sample = await sampleChatgptAnswer(wc, expectedPrompt);
       const update = track(sample);
-      if (update) { latest = update; emit(update); }
+      if (update) publish(update.text, update.done);
       const state = track.status();
       if (state !== lastDiagnostic || Date.now() - lastLog >= 10_000) {
         log("GPT answer capture", options.streamId, JSON.stringify(diagnostics()));
         lastDiagnostic = state; lastLog = Date.now();
       }
-      if (update?.done) { sharedAnswerActive = false; return; }
+      if (update?.done) { sharedAnswerActive = false; stopStream(); return; }
       setTimeout(tick, 350);
     } catch (error) {
       sharedAnswerActive = false;
+      stopStream();
       const detail = error instanceof Error ? error.message : "Could not capture the GPT answer.";
       log("GPT answer capture failed", options.streamId, detail, JSON.stringify(diagnostics()));
       const reason = `${detail} Capture status: ${track.status()}.`;
@@ -1471,6 +1508,7 @@ ipcMain.handle("chatgpt:submit", async (_e, raw, streamOptions) => {
   if (!text.trim()) return { ok: false, error: "Nothing to send." };
   if (!chatgptView) return { ok: false, error: "ChatGPT is not open." };
   chatgptSubmitActive = true;
+  let streamCapture = null;
   let previousText = "";
   try {
     previousText = clipboard.readText();
@@ -1496,20 +1534,27 @@ ipcMain.handle("chatgpt:submit", async (_e, raw, streamOptions) => {
     clipboard.writeText(text);
     pastePlainIntoChatgpt();
     const needle = text.trim().slice(0, 48);
+    if (baseline) {
+      // Attach before sending so the new response stream is observed from its first byte.
+      streamCapture = createChatgptStreamCapture(chatgptView.webContents, log);
+      if (!(await streamCapture.start())) streamCapture = null;
+    }
     const result = await chatgptView.webContents.executeJavaScript(
       `(${clickChatgptSend})(${JSON.stringify(needle)})`,
       true
     );
-    if (result?.ok && baseline) streamChatgptAnswer(chatgptView.webContents, { streamId: streamOptions.streamId, eventId: streamOptions.eventId }, baseline, text);
+    if (result?.ok && baseline) { streamChatgptAnswer(chatgptView.webContents, { streamId: streamOptions.streamId, eventId: streamOptions.eventId }, baseline, text, streamCapture); streamCapture = null; }
     if (result && typeof result === "object") return result;
     return { ok: true };
   } catch (err) {
+    streamCapture?.stop();
     log("chatgpt submit failed:", err instanceof Error ? err.message : String(err));
     return {
       ok: false,
       error: err instanceof Error ? err.message : "Could not send to ChatGPT.",
     };
   } finally {
+    streamCapture?.stop();
     chatgptSubmitActive = false;
     try {
       clipboard.writeText(previousText);

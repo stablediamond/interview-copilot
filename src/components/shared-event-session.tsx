@@ -4,8 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionEvent, SessionMessage, SessionSnapshot } from "@/lib/shared-event-session-types";
 import { getElectronAPI, type ChatgptAnswerUpdate } from "@/lib/electron";
 import { apiFetch } from "@/lib/client";
+import { getValidAccessToken } from "@/lib/job-track-auth";
+import { readSessionStream } from "@/lib/session-stream";
 const btnPrimary = "inline-flex items-center justify-center rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50";
 const btnSecondary = "inline-flex items-center justify-center rounded-md border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50";
+// Used for answer posts that happen before the session connection id exists.
+const ANSWER_CONNECTION = "answer-stream";
 const cardClass = "rounded-lg border border-border bg-card text-card-foreground";
 const inputClass = "rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground";
 
@@ -63,36 +67,69 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
   const bottom = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const endpoint = `/api/calendar/shared-session?eventId=${encodeURIComponent(event.id)}`;
+  // True while the Server-Sent Events stream is delivering updates; polling is
+  // only the fallback for when it is unavailable.
+  const streamLive = useRef(false);
+  const [live, setLive] = useState(false);
+  // Snapshots from POST responses and from the stream merge identically: by
+  // sequence, newest revision wins, so duplicates and reordering are harmless.
+  const applySnapshot = useCallback((next: SessionSnapshot) => {
+    changeCursor.current = Math.max(changeCursor.current, next.changeCursor ?? 0);
+    setSnapshot(next);
+    setMessages(previous => {
+      const byId = new Map(previous.map(m => [m.sequence, m]));
+      next.messages.forEach(m => { if ((byId.get(m.sequence)?.revision ?? -1) <= (m.revision ?? 0)) byId.set(m.sequence, m); });
+      return [...byId.values()].sort((a, b) => a.sequence - b.sequence);
+    });
+    cursor.current = Math.max(cursor.current, next.messageCursor ?? cursor.current);
+    setConnected(true);
+    setConnectionError("");
+  }, []);
   const request = useCallback((payload: Record<string, unknown>): Promise<void> => {
     const task = queue.current.catch(() => {}).then(async () => {
       const next = await apiFetch<SessionSnapshot>(endpoint, { method: "POST",
         body: JSON.stringify({ ...payload, connectionId: connection.current, after: cursor.current, afterChange: changeCursor.current }), signal: AbortSignal.timeout(20_000) });
-      changeCursor.current = Math.max(changeCursor.current, next.changeCursor ?? 0);
-      setSnapshot(next);
-      setMessages(previous => {
-        const byId = new Map(previous.map(m => [m.sequence, m]));
-        next.messages.forEach(m => { if ((byId.get(m.sequence)?.revision ?? -1) <= (m.revision ?? 0)) byId.set(m.sequence, m); });
-        return [...byId.values()].sort((a, b) => a.sequence - b.sequence);
-      });
-      cursor.current = Math.max(cursor.current, next.messageCursor ?? cursor.current);
-      setConnected(true);
-      setConnectionError("");
+      applySnapshot(next);
     });
     queue.current = task;
     return task;
-  }, [endpoint]);
+  }, [endpoint, applySnapshot]);
   useEffect(() => {
     const api = getElectronAPI();
     if (!api?.chatgpt.onAnswer) return;
     const pending = new Map<string, ChatgptAnswerUpdate>();
     const revisions = new Map<string, number>();
     let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
+    let sending = false;
+    // Each delta is posted as soon as it arrives. Updates that arrive while a
+    // post is in flight coalesce into the newest revision (the answer text is
+    // cumulative), so the final "done" update can never be skipped.
+    async function pump() {
+      if (sending || stopped) return;
+      sending = true;
+      try {
+        while (!stopped) {
+          const update = pending.values().next().value;
+          if (!update) break;
+          try {
+            await apiFetch(endpoint, { method: "POST", signal: AbortSignal.timeout(20_000), body: JSON.stringify({
+              op: "answer", minimal: true, clientId: update.streamId, body: update.text, revision: update.revision, done: update.done,
+              connectionId: connection.current || ANSWER_CONNECTION, after: 0 }) });
+            if (pending.get(update.streamId)?.revision === update.revision) pending.delete(update.streamId);
+            setStreamStatus(update.error || (update.done ? "GPT answer shared." : "Sharing GPT answer…"));
+          } catch (error) {
+            setStreamStatus(`Sharing interrupted; retrying. ${error instanceof Error ? error.message : ""}`);
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+        }
+      } finally { sending = false; }
+    }
     const receive = (update: ChatgptAnswerUpdate) => {
       if (stopped || update.eventId !== event.id || update.revision <= (revisions.get(update.streamId) ?? 0)) return;
       revisions.set(update.streamId, update.revision);
       pending.set(update.streamId, update);
       setStreamStatus(update.error || "Sharing GPT answer…");
+      void pump();
     };
     // Subscribe first so a newer live update cannot be lost while replay loads.
     const unsubscribe = api.chatgpt.onAnswer(receive);
@@ -101,30 +138,24 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
         if (!stopped && !revisions.size) setStreamStatus(`Could not restore the GPT answer. ${error instanceof Error ? error.message : ""}`);
       });
     }
-    async function flush() {
-      const update = pending.values().next().value;
-      if (update) {
-        try {
-          await request({ op: "answer", clientId: update.streamId, body: update.text, revision: update.revision, done: update.done });
-          if (pending.get(update.streamId)?.revision === update.revision) pending.delete(update.streamId);
-          setStreamStatus(update.error || (update.done ? "GPT answer shared." : "Sharing GPT answer…"));
-        } catch (error) {
-          setStreamStatus(`Sharing interrupted; retrying. ${error instanceof Error ? error.message : ""}`);
-        }
-      }
-      if (!stopped) timer = setTimeout(flush, 100);
-    }
-    timer = setTimeout(flush, 100);
-    return () => { stopped = true; clearTimeout(timer); unsubscribe(); };
-  }, [event.id, request]);
+    // Updates may already be waiting (replayed after a reload).
+    void pump();
+    return () => { stopped = true; unsubscribe(); };
+  }, [event.id, endpoint]);
   useEffect(() => {
     connection.current = crypto.randomUUID();
     const connectionId = connection.current;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
+    let lastSync = 0;
+    // Polling is the fallback: fast while the live stream is down, and only a
+    // slow safety-net sync (links, presence) while the stream is delivering.
     async function sync() {
-      try { await request({ op: "sync" }); }
-      catch (error) { setConnected(false); setConnectionError(error instanceof Error ? error.message : "Connection failed."); }
+      if (!streamLive.current || Date.now() - lastSync >= 10_000) {
+        lastSync = Date.now();
+        try { await request({ op: "sync" }); }
+        catch (error) { if (!streamLive.current) { setConnected(false); setConnectionError(error instanceof Error ? error.message : "Connection failed."); } }
+      }
       if (!stopped) timer = setTimeout(sync, 150);
     }
     void sync();
@@ -132,6 +163,36 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
     window.addEventListener("pagehide", leave);
     return () => { stopped = true; clearTimeout(timer); window.removeEventListener("pagehide", leave); void queue.current.finally(leave).catch(() => {}); };
   }, [endpoint, request]);
+  // Live updates: Server-Sent Events from Job Track (through the local proxy).
+  // Reconnects with the newest cursors and backs off while unavailable; the
+  // polling effect above covers any gap.
+  useEffect(() => {
+    const streamUrl = `/api/calendar/shared-session/stream?eventId=${encodeURIComponent(event.id)}`;
+    const abort = new AbortController();
+    let backoff = 500;
+    const markLive = (value: boolean) => { streamLive.current = value; setLive(value); };
+    void (async () => {
+      while (!abort.signal.aborted) {
+        const started = Date.now();
+        try {
+          const token = await getValidAccessToken();
+          const params = new URLSearchParams({ connectionId: connection.current || ANSWER_CONNECTION, after: String(cursor.current), afterChange: String(changeCursor.current) });
+          await readSessionStream<SessionSnapshot>({
+            url: `${streamUrl}&${params}`, token, signal: abort.signal,
+            onOpen: () => markLive(true),
+            onSnapshot: applySnapshot,
+          });
+          if (Date.now() - started > 3000) backoff = 500;
+        } catch {
+          if (abort.signal.aborted) break;
+          backoff = Math.min(backoff * 2, 10_000);
+        }
+        markLive(false);
+        if (!abort.signal.aborted) await new Promise(resolve => setTimeout(resolve, backoff));
+      }
+    })();
+    return () => { abort.abort(); streamLive.current = false; };
+  }, [event.id, applySnapshot]);
   useEffect(() => { if (tab === "chat" && follow.current) bottom.current?.scrollIntoView({ block: "nearest" }); }, [messages, tab]);
   async function send() {
     const body = drafts[messageKind].trim();
@@ -149,7 +210,7 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
   const saveLink = (field: LinkField) => (value: string, version: number) => request({ op: "link", field, value, version });
   return <div className="space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-2"><h1 className="text-2xl font-semibold">Session</h1><Link className={btnSecondary} href={calendarPath}>Back to calendar</Link></div>
-    <p role="status" className="text-sm text-slate-500">{connected ? "Connected · updates every 500 ms" : `Connecting / reconnecting… ${connectionError} Presence may be out of date.`}</p>
+    <p role="status" className="text-sm text-slate-500">{connected ? (live ? "Connected · live updates" : "Connected · polling for updates") : `Connecting / reconnecting… ${connectionError} Presence may be out of date.`}</p>
     {streamStatus ? <p role="status" className="text-sm text-muted-foreground">{streamStatus}</p> : null}
     <div className="grid min-w-0 gap-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
       <aside className={`${cardClass} flex min-w-0 flex-col gap-6 p-4`}>

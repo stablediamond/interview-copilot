@@ -295,7 +295,7 @@ function createAnswerTracker(baseline, now = Date.now()) {
     const idle = !snapshot.activeStop && (!snapshot.busy || snapshot.complete === true || snapshot.idleComposer === true);
     if (!idle) idleSince = null;
     else if (idleSince === null) idleSince = Date.now();
-    const done = idleSince !== null && Date.now() - Math.max(lastChange, idleSince) >= 2500;
+    const done = idleSince !== null && Date.now() - Math.max(lastChange, idleSince) >= 500;
     status = done ? 'complete' : idle ? 'confirming-completion' : 'receiving-answer';
     if (!changed && !done) return null;
     if (done) finished = true;
