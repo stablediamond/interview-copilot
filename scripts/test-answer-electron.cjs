@@ -120,6 +120,42 @@ async function run() {
     assert.deepEqual(track(await sample({ expectedPrompt })), { text: 'Current answer only', revision: 3, done: true });
   });
 
+  await test('prompt anchor falls back to following content when the answer has no markdown or role markers', async () => {
+    const expectedPrompt = 'Explain the unmarked layout answer.';
+    await reset('<main><div id="thread"><div class="turn"><div>Older question</div></div><div class="turn"><div>Older answer</div></div></div></main><div id="prompt-textarea" contenteditable="true"></div>');
+    const baseline = await sample({ expectedPrompt });
+    const track = createAnswerTracker(baseline);
+    await evaluate(prompt => {
+      const thread = document.getElementById('thread');
+      const user = document.createElement('div');
+      user.className = 'turn';
+      user.innerHTML = '<div class="bubble"></div>';
+      user.firstElementChild.textContent = prompt;
+      thread.appendChild(user);
+      thread.insertAdjacentHTML('beforeend', '<div class="turn"><div class="body"><p>Unmarked first line.</p><p>Second line.</p></div><button>Copy</button></div>');
+      document.querySelector('main').insertAdjacentHTML('beforeend', '<footer>ChatGPT can make mistakes.</footer>');
+    }, expectedPrompt);
+    const snapshot = await sample({ expectedPrompt });
+    assert.equal(snapshot.tailFallback, true);
+    assert.ok(snapshot.text.includes('Unmarked first line.'));
+    assert.ok(snapshot.text.includes('Second line.'));
+    assert.ok(!snapshot.text.includes('Older answer'));
+    assert.ok(!snapshot.text.includes('ChatGPT can make mistakes'));
+    assert.ok(!snapshot.text.includes(expectedPrompt));
+    assert.equal(track(snapshot)?.done, false);
+    now += 2500;
+    assert.equal(track(await sample({ expectedPrompt }))?.done, true);
+  });
+
+  await test('missing answer reports a text-free layout outline', async () => {
+    const expectedPrompt = 'A prompt without any answer yet.';
+    await reset('<main><div id="thread"><div class="turn"><div class="bubble">A prompt without any answer yet.</div></div><div class="turn"><div class="spacer"></div></div></div></main>');
+    const snapshot = await sample({ expectedPrompt });
+    assert.equal(snapshot.text, '');
+    assert.ok(snapshot.outline.length > 0);
+    assert.ok(!JSON.stringify(snapshot.outline).includes('prompt without'));
+  });
+
   await test('zero-role diagnostics identify a loaded page without exposing content', async () => {
     await reset('<main><p>Private placeholder content</p></main><div id="prompt-textarea" contenteditable="true"></div>');
     const snapshot = await sample({ expectedPrompt: 'A prompt absent from the page' });

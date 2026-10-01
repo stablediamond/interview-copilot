@@ -96,6 +96,33 @@ function readChatgptAnswer(options = {}) {
     }
     assistants = after;
   }
+  // Structure-only description (tag, role/test-id attributes, class tokens and
+  // text length). Never includes page text, so it is safe to log.
+  const describe = el => {
+    const attrs = ['data-testid', 'data-turn', 'data-message-author-role', 'role']
+      .map(name => el.getAttribute(name) ? `${name.replace('data-', '')}=${String(el.getAttribute(name)).slice(0, 40)}` : '').filter(Boolean);
+    const classes = String(el.getAttribute('class') || '').split(/\s+/).filter(Boolean).slice(0, 3).map(name => name.slice(0, 24));
+    return `${el.tagName.toLowerCase()}${attrs.length ? `[${attrs.join(',')}]` : ''}${classes.length ? `.${classes.join('.')}` : ''}#${normalize(el.textContent).length}`;
+  };
+  // The prompt was found but no markdown/role-marked answer exists. The page
+  // layout changed, so read whatever visible content follows the prompt turn
+  // (up to the conversation boundary) instead of waiting forever.
+  let tailFallback = false;
+  const outline = [];
+  if (user && roleSource === 'prompt-anchor' && after.length === 0) {
+    const stop = conversationScope || document.body;
+    const tail = [];
+    for (let node = user; node && node !== stop && node !== document.body; node = node.parentElement) {
+      outline.push(`^${describe(node)}`);
+      for (let sibling = node.nextElementSibling; sibling; sibling = sibling.nextElementSibling) {
+        outline.push(`+${describe(sibling)}`);
+        if (!allowed(sibling) || sibling.matches('footer, [role="contentinfo"], script, style') || sibling.closest(reasoningSelector)) continue;
+        if (users.some(message => sibling.contains(message))) continue;
+        tail.push(sibling);
+      }
+    }
+    if (tail.length) { after = tail; assistants = tail; tailFallback = true; }
+  }
   const assistant = after.at(-1);
   const turn = assistant?.closest(turnSelector) || assistant;
 
@@ -139,7 +166,7 @@ function readChatgptAnswer(options = {}) {
   // These actions are often hidden until hover (or while the GPT tab is hidden).
   // Their presence in THIS answer's turn is a completion signal; visibility is not.
   const completionSelector = '[data-testid="copy-turn-action-button"], [data-testid="good-response-turn-action-button"], [data-testid="bad-response-turn-action-button"]';
-  const hasCompletionActions = [...(turn?.querySelectorAll(completionSelector) || [])].some(enabled);
+  const hasCompletionActions = [...(tailFallback ? after.flatMap(el => [...el.querySelectorAll(completionSelector)]) : turn?.querySelectorAll(completionSelector) || [])].some(enabled);
   const markedStreaming = Boolean(assistant?.closest('[data-is-streaming="true"]') || turn?.querySelector('[data-is-streaming="true"], .result-streaming'));
   const composer = document.querySelector('#prompt-textarea, [data-testid="prompt-textarea"], [data-testid="composer"] textarea, [contenteditable="true"][data-lexical-editor="true"], div.ProseMirror[contenteditable="true"], [contenteditable="true"][role="textbox"]');
   const send = document.querySelector('button[data-testid="send-button"], #composer-submit-button, button[aria-label="Send prompt"], button[aria-label="Send message"]');
@@ -184,6 +211,9 @@ function readChatgptAnswer(options = {}) {
     readyState: document.readyState,
     frames: document.querySelectorAll('iframe, frame').length,
     roleSource,
+    tailFallback,
+    roleNodes: document.querySelectorAll('[data-message-author-role], [data-message-id], [data-turn]').length,
+    outline: text ? [] : outline.slice(0, 24),
   };
 }
 function createAnswerTracker(baseline, now = Date.now()) {
