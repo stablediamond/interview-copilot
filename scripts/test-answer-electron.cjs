@@ -147,6 +147,20 @@ async function run() {
     assert.equal(track(await sample({ expectedPrompt }))?.done, true);
   });
 
+  await test('repeated identical prompt with label and button text is bound as a new turn', async () => {
+    const expectedPrompt = 'Describe your experience leading a team. Include one concrete example of a conflict you resolved.';
+    const turn = answer => `<div class="turn"><div class="bubble"><span class="sr-only">You said:</span><p>Describe your experience leading a team.</p><p>Include one concrete example of a conflict you resolved.</p><button>Edit message</button></div></div><div class="turn"><div class="body"><p>${answer}</p></div></div>`;
+    await reset(`<main><div id="thread">${turn('Old answer one')}</div></main><div id="prompt-textarea" contenteditable="true"></div>`);
+    const baseline = await sample({ expectedPrompt });
+    assert.equal(baseline.promptMatches, 1);
+    const track = createAnswerTracker(baseline);
+    assert.equal(track(baseline), null);
+    await evaluate(html => { document.getElementById('thread').insertAdjacentHTML('beforeend', html); }, turn('Fresh answer text'));
+    const snapshot = await sample({ expectedPrompt });
+    assert.equal(snapshot.promptMatches, 2);
+    assert.equal(track(snapshot)?.text, 'Fresh answer text');
+  });
+
   await test('missing answer reports a text-free layout outline', async () => {
     const expectedPrompt = 'A prompt without any answer yet.';
     await reset('<main><div id="thread"><div class="turn"><div class="bubble">A prompt without any answer yet.</div></div><div class="turn"><div class="spacer"></div></div></div></main>');

@@ -42,10 +42,33 @@ function readChatgptAnswer(options = {}) {
   let assistants = collect('assistant');
   let user = users.at(-1);
   let promptScope = null;
+  let promptMatchCount = 0;
   // Some layouts omit all role attributes. Bind to the submitted prompt inside
   // the conversation, never to a copy in the composer/sidebar or a whole page.
   const expectedPrompt = normalize(options.expectedPrompt);
-  const matchesPrompt = value => expectedPrompt && (value === expectedPrompt || (expectedPrompt.length >= 80 && value.length >= 80 && value.length <= expectedPrompt.length + 4 && value.startsWith(expectedPrompt.slice(0, 80))));
+  // Screen-reader labels ("You said:") are part of textContent in some layouts.
+  const stripLabel = value => value.replace(/^(?:you said|user said|your message)\s*:?\s*/i, '');
+  const matchesPrompt = raw => {
+    if (!expectedPrompt) return false;
+    const value = stripLabel(raw);
+    return value === expectedPrompt || (expectedPrompt.length >= 80 && value.length >= 80 && value.length <= expectedPrompt.length + 4 && value.startsWith(expectedPrompt.slice(0, 80)));
+  };
+  // True when the element holds the prompt plus incidental UI text (hidden
+  // labels, edit/copy buttons) that exact comparison would reject.
+  // Block elements are often joined without whitespace in textContent
+  // ("team.Include"), so this comparison ignores whitespace entirely.
+  const compact = value => String(value || '').replace(/\s+/g, '');
+  const compactPrompt = compact(expectedPrompt);
+  const matchesPromptLoosely = (el, value) => {
+    if (!compactPrompt) return false;
+    const compactValue = compact(value);
+    if (compactValue.length > compactPrompt.length + 120 || !compactValue.includes(compactPrompt.slice(0, Math.min(80, compactPrompt.length)))) return false;
+    const copy = el.cloneNode(true);
+    copy.querySelectorAll('button, [role="button"], svg, .sr-only, [class*="sr-only"]').forEach(node => node.remove());
+    copy.querySelectorAll('h1, h2, h3, h4, h5, h6, [role="heading"]').forEach(node => { if (roleLabel(node.textContent) === 'user') node.remove(); });
+    const cleaned = compact(copy.textContent).replace(/^(?:yousaid|usersaid|yourmessage):?/i, '');
+    return cleaned === compactPrompt || (compactPrompt.length >= 80 && cleaned.length >= 80 && cleaned.length <= compactPrompt.length + 4 && cleaned.startsWith(compactPrompt.slice(0, 80)));
+  };
   if (expectedPrompt) {
     const scopes = [...document.querySelectorAll(scopeSelector)].filter(allowed);
     const matches = [];
@@ -59,7 +82,7 @@ function readChatgptAnswer(options = {}) {
         const value = normalize(el.textContent);
         // Exact matching also supports short questions. A truncated long prompt
         // must retain a distinctive prefix, without absorbing the answer below.
-        return matchesPrompt(value);
+        return matchesPrompt(value) || matchesPromptLoosely(el, value);
       });
       for (const el of candidates) {
         if (!candidates.some(other => other !== el && el.contains(other)) && !matches.includes(el)) matches.push(el);
@@ -67,6 +90,7 @@ function readChatgptAnswer(options = {}) {
     }
     matches.sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & 4 ? -1 : 1);
     const anchor = matches.at(-1);
+    promptMatchCount = matches.length;
     if (anchor) {
       user = anchor;
       users = [...users, ...matches];
@@ -212,6 +236,8 @@ function readChatgptAnswer(options = {}) {
     frames: document.querySelectorAll('iframe, frame').length,
     roleSource,
     tailFallback,
+    promptMatches: promptMatchCount,
+    composerChars: composer ? normalize(composer.textContent || composer.value).length : 0,
     roleNodes: document.querySelectorAll('[data-message-author-role], [data-message-id], [data-turn]').length,
     outline: text ? [] : outline.slice(0, 24),
   };
@@ -231,7 +257,10 @@ function createAnswerTracker(baseline, now = Date.now()) {
       if (!overlaps(currentKeys, boundUser)) { status = 'different-user-turn'; return null; }
       boundUser = [...new Set([...boundUser, ...currentKeys])];
     } else {
-      if (overlaps(currentKeys, baselineKeys)) { status = 'waiting-for-user-turn'; return null; }
+      // Another occurrence of the submitted prompt proves a new user turn even
+      // when the matched node/alias is shared with the baseline.
+      const grew = (snapshot.promptMatches || 0) > (baseline.promptMatches || 0);
+      if (overlaps(currentKeys, baselineKeys) && !grew) { status = 'waiting-for-user-turn'; return null; }
       boundUser = currentKeys;
     }
     if (!snapshot.afterUser || !snapshot.text) { status = 'waiting-for-answer-text'; idleSince = null; return null; }

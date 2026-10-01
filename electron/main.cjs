@@ -1426,6 +1426,8 @@ function streamChatgptAnswer(wc, options, baseline, expectedPrompt = "") {
     bodyElements: sample?.bodyElements ?? 0, readyState: sample?.readyState ?? "unknown",
     frames: sample?.frames ?? 0, roleSource: sample?.roleSource ?? "unknown",
     tailFallback: Boolean(sample?.tailFallback), roleNodes: sample?.roleNodes ?? 0,
+    promptMatches: sample?.promptMatches ?? 0, baselinePromptMatches: baseline?.promptMatches ?? 0,
+    composerChars: sample?.composerChars ?? 0,
     ...(sample?.outline?.length ? { outline: sample.outline } : {}),
   });
   log("GPT answer capture started", options.streamId, "baseline users:", baseline.userCount, "assistants:", baseline.assistantCount);
