@@ -4,7 +4,7 @@
  * Unset JOB_TRACK_URL → production Job Track.
  * Set JOB_TRACK_URL="" to disable the login gate (local-only, no accounts).
  */
-export const DEFAULT_JOB_TRACK_URL = "https://job-track.usgm.workers.dev";
+export const DEFAULT_JOB_TRACK_URL = "https://platform.peerink.com";
 
 export function getJobTrackUrl(): string {
   const raw =

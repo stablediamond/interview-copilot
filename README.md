@@ -215,7 +215,7 @@ There is no separate Interview Coach password.
 3. Revoke access from Job Track (suspend the user, change their password, or
    delete their session). The overlay drops them on the next verification.
 
-By default the app talks to `https://job-track.usgm.workers.dev`. Override with
+By default the app talks to `https://platform.peerink.com`. Override with
 `JOB_TRACK_URL` (and `NEXT_PUBLIC_JOB_TRACK_URL` for the signup link). Set
 `JOB_TRACK_URL` to an empty string to turn the gate **off** for local-only use.
 
