@@ -1,10 +1,10 @@
 /**
- * Server-side access gate backed by Job Track Auth.
+ * Server-side access gate backed by Peer Ink Auth.
  *
  * Protected API routes call `assertAccess(request)`, which checks the caller's
- * bearer token (issued after a Job Track email/password login) against
- * Job Track's /api/auth/me endpoint. Pending, suspended, and revoked accounts
- * are rejected the same way as the Job Track web app.
+ * bearer token (issued after a Peer Ink email/password login) against
+ * Peer Ink's /api/auth/me endpoint. Pending, suspended, and revoked accounts
+ * are rejected the same way as the Peer Ink web app.
  *
  * When JOB_TRACK_URL is set to an empty string, the gate is OFF and every
  * request is allowed.
@@ -62,13 +62,13 @@ async function verifyToken(token: string): Promise<{ ok: boolean; message?: stri
     // Network failure: trust a recent successful verification if we have one, so
     // a brief outage doesn't kick out a signed-in user mid-interview.
     if (cached?.ok) return { ok: true };
-    return { ok: false, message: "Could not reach Job Track to verify your session." };
+    return { ok: false, message: "Could not reach Peer Ink to verify your session." };
   }
 }
 
 /**
- * Throw AccessError if the request isn't from a valid signed-in Job Track user.
- * No-op when Job Track auth isn't configured.
+ * Throw AccessError if the request isn't from a valid signed-in Peer Ink user.
+ * No-op when Peer Ink auth isn't configured.
  */
 export async function assertAccess(request?: Request): Promise<void> {
   if (!isJobTrackConfigured()) return;

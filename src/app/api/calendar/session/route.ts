@@ -121,7 +121,7 @@ function jobTrackUnavailable(res: Response, parsed: JobTrackSessionBody | null) 
   if (res.status === 404) {
     return jsonError(
       parsed?.message ||
-        "Job Track session context is not available on the server yet. Deploy the latest Job Track app.",
+        "Peer Ink session context is not available on the server yet. Deploy the latest Peer Ink app.",
       parsed?.error === "not_found" ? 404 : 502,
     );
   }
@@ -133,7 +133,7 @@ function jobTrackUnavailable(res: Response, parsed: JobTrackSessionBody | null) 
 }
 
 /**
- * Prefill Interview Copilot from a Job Track calendar event: local candidate
+ * Prefill Interview Copilot from a Peer Ink calendar event: local candidate
  * and job profiles plus editable resume, JD, and base prompts.
  */
 export async function GET(request: Request) {
@@ -145,7 +145,7 @@ export async function GET(request: Request) {
 
   if (!isJobTrackConfigured()) {
     return jsonError(
-      "Job Track is not configured, so this event cannot start a session.",
+      "Peer Ink is not configured, so this event cannot start a session.",
       503,
     );
   }
@@ -237,7 +237,7 @@ export async function GET(request: Request) {
     if (err instanceof AccessError) return handleRouteError(err);
     if (err instanceof TypeError) {
       return jsonError(
-        "Could not reach Job Track. Check your connection and try again.",
+        "Could not reach Peer Ink. Check your connection and try again.",
         502,
       );
     }

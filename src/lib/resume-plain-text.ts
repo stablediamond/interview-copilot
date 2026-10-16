@@ -413,7 +413,7 @@ function flattenUnknownObject(value: unknown, depth = 0): string[] {
   return lines;
 }
 
-/** Flatten Job Track resume_content_json (FlowCV / LLM) to editable plain text. */
+/** Flatten Peer Ink resume_content_json (FlowCV / LLM) to editable plain text. */
 export function formatResumeJsonAsPlainText(resume: unknown): string {
   const parsed = unwrapResume(resume);
   if (!parsed) {

@@ -6,7 +6,7 @@ import {
   resolveInterviewPrompts,
 } from "./interview-prompts";
 
-test("looksLikeResumeWriterPrompt detects Job Track candidate resume prompts", () => {
+test("looksLikeResumeWriterPrompt detects Peer Ink candidate resume prompts", () => {
   assert.equal(
     looksLikeResumeWriterPrompt(
       "You are a senior technical resume strategist, ATS optimization specialist",

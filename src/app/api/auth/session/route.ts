@@ -4,7 +4,7 @@ import { isJobTrackConfigured } from "@/lib/job-track";
 
 export const runtime = "nodejs";
 
-/** Confirm the stored Job Track token is still valid. */
+/** Confirm the stored Peer Ink token is still valid. */
 export async function GET(request: Request) {
   try {
     await assertAccess(request);

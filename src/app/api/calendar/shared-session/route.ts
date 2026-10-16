@@ -6,7 +6,7 @@ async function forward(request: Request) {
   try {
     await assertAccess(request);
     const authorization = request.headers.get("authorization");
-    if (!isJobTrackConfigured() || !authorization?.match(/^Bearer\s+\S+$/i)) return jsonError("Sign in to Job Track to join a shared session.", 401);
+    if (!isJobTrackConfigured() || !authorization?.match(/^Bearer\s+\S+$/i)) return jsonError("Sign in to Peer Ink to join a shared session.", 401);
     const eventId = new URL(request.url).searchParams.get("eventId")?.trim();
     if (!eventId || eventId.length > 200) return jsonError("A calendar event is required.", 400);
     const response = await fetch(`${getJobTrackUrl()}/api/event-sessions/${encodeURIComponent(eventId)}`, {
@@ -16,8 +16,8 @@ async function forward(request: Request) {
       cache: "no-store", signal: AbortSignal.timeout(15000),
     });
     const data = await response.json().catch(() => null);
-    if (!response.ok) return jsonError(data?.message || data?.error || "Shared sessions are unavailable. Deploy the latest Job Track server.", response.status);
-    if (!data) return jsonError("Job Track returned an invalid session response.", 502);
+    if (!response.ok) return jsonError(data?.message || data?.error || "Shared sessions are unavailable. Deploy the latest Peer Ink server.", response.status);
+    if (!data) return jsonError("Peer Ink returned an invalid session response.", 502);
     return jsonOk(data);
   } catch (error) { return handleRouteError(error); }
 }

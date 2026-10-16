@@ -9,7 +9,7 @@ function extractToken(request: Request): string | null {
   return match ? match[1].trim() : null;
 }
 
-/** Best-effort revoke of the Job Track session behind this bearer token. */
+/** Best-effort revoke of the Peer Ink session behind this bearer token. */
 export async function POST(request: Request) {
   const token = extractToken(request);
   if (token && isJobTrackConfigured()) {

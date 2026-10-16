@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Mic } from "lucide-react";
 import { NAV_ITEMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -14,10 +13,12 @@ export function SiteNav() {
     <header className="sticky top-0 z-40 w-full border-b border-border bg-background/80 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4">
         <Link href="/" className="flex items-center gap-2 font-semibold">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Mic className="h-4 w-4" />
-          </span>
-          <span className="hidden sm:inline">Interview Copilot</span>
+          <img
+            src="/peerink-mark.png"
+            alt=""
+            className="h-7 w-7 object-contain"
+          />
+          <span className="hidden sm:inline">Peer Ink</span>
         </Link>
         <nav className="flex flex-1 items-center gap-1 overflow-x-auto text-sm scrollbar-thin">
           {NAV_ITEMS.map((item) => {

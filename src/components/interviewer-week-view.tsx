@@ -2,7 +2,9 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, Mic } from "lucide-react";
+import { Mic } from "lucide-react";
+import { CalendarDatePicker } from "@/components/calendar-date-picker";
+import { TimeZonePicker } from "@/components/timezone-picker";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,16 +13,22 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { TimeZonePicker } from "@/components/timezone-picker";
 import type { CalendarEventView } from "@/lib/calendar-types";
+import {
+  calendarEventRangeForWeek,
+  calendarRangeContains,
+  type CalendarEventRange,
+} from "@/lib/calendar-event-range";
 import {
   HOUR_END,
   HOUR_HEIGHT,
   HOUR_START,
   TIME_GUTTER,
   addDays,
+  applicationLabel,
   dayHeaderParts,
   detectDefaultTimeZone,
+  eventMinutesInDay,
   eventStyle,
   formatHourLabel,
   formatRangeLabel,
@@ -29,6 +37,7 @@ import {
   startOfWeek,
   zonedDateKey,
 } from "@/lib/calendar-layout";
+import styles from "./calendar-week-view.module.css";
 
 const INITIAL_SCROLL_HOUR = 8;
 
@@ -37,17 +46,49 @@ const hours = Array.from(
   (_, i) => HOUR_START + i
 );
 
+function formatMinuteLabel(minutes: number): string {
+  const hour24 = Math.floor(minutes / 60) % 24;
+  const minute = minutes % 60;
+  const suffix = hour24 < 12 ? "am" : "pm";
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return minute === 0
+    ? `${hour12}${suffix}`
+    : `${hour12}:${String(minute).padStart(2, "0")}${suffix}`;
+}
+
 export function InterviewerWeekView({
-  events,
+  events: initialEvents,
+  initialEventRange,
+  jobTrackUrl,
+  applicationBasePath,
+  onRangeNeeded,
 }: {
   events: CalendarEventView[];
+  initialEventRange: CalendarEventRange;
+  jobTrackUrl: string;
+  applicationBasePath: string;
+  /** Load more events when the visible week is outside the loaded range. */
+  onRangeNeeded?: (range: CalendarEventRange) => Promise<{
+    events: CalendarEventView[];
+    range: CalendarEventRange;
+  }>;
 }) {
   const [timeZone, setTimeZone] = React.useState(detectDefaultTimeZone);
   const [anchor, setAnchor] = React.useState(() => new Date());
+  const [eventList, setEventList] = React.useState(initialEvents);
+  const [loadedRange, setLoadedRange] = React.useState(initialEventRange);
+  const [loadingEvents, setLoadingEvents] = React.useState(false);
+  const [eventsError, setEventsError] = React.useState<string | null>(null);
+  const [eventsRetry, setEventsRetry] = React.useState(0);
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [now, setNow] = React.useState(() => new Date());
   const [clockReady, setClockReady] = React.useState(false);
   const calendarScrollRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    setEventList(initialEvents);
+    setLoadedRange(initialEventRange);
+  }, [initialEvents, initialEventRange]);
 
   React.useEffect(() => {
     setTimeZone(detectDefaultTimeZone());
@@ -57,7 +98,6 @@ export function InterviewerWeekView({
 
   React.useEffect(() => {
     if (!clockReady || !calendarScrollRef.current) return;
-    // Grid rows are wall-clock hours in the selected timezone.
     calendarScrollRef.current.scrollTop =
       (INITIAL_SCROLL_HOUR - HOUR_START) * HOUR_HEIGHT;
   }, [clockReady, timeZone]);
@@ -84,6 +124,38 @@ export function InterviewerWeekView({
     () => zonedDateKey(now, timeZone),
     [now, timeZone]
   );
+  const neededRange = React.useMemo(
+    () => calendarEventRangeForWeek(days[0], timeZone),
+    [days, timeZone]
+  );
+
+  React.useEffect(() => {
+    if (!onRangeNeeded) return;
+    if (calendarRangeContains(loadedRange, neededRange)) return;
+    let cancelled = false;
+    setLoadingEvents(true);
+    setEventsError(null);
+    void (async () => {
+      try {
+        const result = await onRangeNeeded(neededRange);
+        if (cancelled) return;
+        setEventList(result.events);
+        setLoadedRange(result.range);
+      } catch (err) {
+        if (!cancelled) {
+          setEventsError(
+            err instanceof Error ? err.message : "Could not load calendar."
+          );
+        }
+      } finally {
+        if (!cancelled) setLoadingEvents(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadedRange, neededRange, onRangeNeeded, eventsRetry]);
+
   const nowMarker = React.useMemo(() => {
     if (!clockReady) return null;
     const parts = (() => {
@@ -114,178 +186,257 @@ export function InterviewerWeekView({
     const map = new Map<string, ReturnType<typeof layoutDayEvents>>();
     for (const day of days) {
       const key = zonedDateKey(day, timeZone);
-      map.set(key, layoutDayEvents(events, key, timeZone));
+      map.set(key, layoutDayEvents(eventList, key, timeZone));
     }
     return map;
-  }, [days, events, timeZone]);
+  }, [days, eventList, timeZone]);
 
-  const selected = events.find((e) => e.id === selectedId) ?? null;
+  const selected = eventList.find((e) => e.id === selectedId) ?? null;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className={styles.calendar}>
+      <div className={styles.toolbar}>
         <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setAnchor(new Date())}
-          >
+          <button type="button" onClick={() => setAnchor(new Date())}>
             Today
-          </Button>
-          <Button
+          </button>
+          <button
             type="button"
-            variant="outline"
-            size="icon"
             aria-label="Previous week"
             onClick={() => setAnchor(addDays(weekStart, -7))}
           >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button
+            ‹
+          </button>
+          <button
             type="button"
-            variant="outline"
-            size="icon"
             aria-label="Next week"
             onClick={() => setAnchor(addDays(weekStart, 7))}
           >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          <p className="text-sm font-semibold">{rangeLabel}</p>
+            ›
+          </button>
+          <CalendarDatePicker
+            label={rangeLabel}
+            selected={anchor}
+            weekStart={days[0]}
+            weekEnd={days[6]}
+            timeZone={timeZone}
+            onSelect={setAnchor}
+          />
         </div>
         <TimeZonePicker value={timeZone} onChange={setTimeZone} />
       </div>
 
-      <div ref={calendarScrollRef} className="max-h-[70vh] overflow-auto rounded-lg border border-border bg-card">
+      {loadingEvents ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading events…
+        </p>
+      ) : null}
+      {eventsError ? (
         <div
-          className="sticky top-0 z-20 grid border-b border-border bg-card"
-          style={{
-            gridTemplateColumns: `${TIME_GUTTER} repeat(7, minmax(0, 1fr))`,
-          }}
+          role="alert"
+          className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
         >
-          <div className="border-r border-border" />
-          {days.map((day) => {
-            const key = zonedDateKey(day, timeZone);
-            const isToday = key === todayKey;
-            const { dayNum, weekday } = dayHeaderParts(day, timeZone);
-            return (
-              <div
-                key={key}
-                className="border-r border-border px-3 py-2 text-left last:border-r-0"
-              >
-                <p
-                  className={`text-2xl font-semibold leading-none tracking-tight ${
-                    isToday ? "text-primary" : ""
-                  }`}
-                >
-                  {dayNum}
-                </p>
-                <p
-                  className={`mt-1 text-xs font-medium ${
-                    isToday ? "text-primary" : "text-muted-foreground"
-                  }`}
-                >
-                  {weekday}
-                </p>
-              </div>
-            );
-          })}
+          {eventsError}{" "}
+          <button
+            type="button"
+            className="underline"
+            onClick={() => setEventsRetry((value) => value + 1)}
+          >
+            Retry
+          </button>
         </div>
+      ) : null}
 
-        <div
-          className="relative grid"
-          style={{
-            gridTemplateColumns: `${TIME_GUTTER} repeat(7, minmax(0, 1fr))`,
-          }}
-        >
-          <div className="relative border-r border-border">
-            {hours.map((hour) => (
-              <div
-                key={hour}
-                className="border-b border-border/60 pr-2 text-right text-xs text-muted-foreground"
-                style={{ height: HOUR_HEIGHT }}
-              >
-                <span className="-translate-y-2 block font-medium">
-                  {formatHourLabel(hour)}
-                </span>
+      <div className={styles.workspace}>
+        <div className={styles.main}>
+          <div
+            ref={calendarScrollRef}
+            data-calendar-scroll
+            className={styles.scroll}
+          >
+            <div className={styles.sheet}>
+              <div data-calendar-header className={styles.stickyHeader}>
+                <div
+                  className={styles.dayHeaders}
+                  style={{
+                    gridTemplateColumns: `${TIME_GUTTER} repeat(7, minmax(0, 1fr))`,
+                  }}
+                >
+                  <div className={styles.headerGutter} />
+                  {days.map((day) => {
+                    const key = zonedDateKey(day, timeZone);
+                    const isToday = key === todayKey;
+                    const { dayNum, weekday } = dayHeaderParts(day, timeZone);
+                    return (
+                      <div
+                        key={key}
+                        className={`${styles.dayHeader} ${isToday ? styles.today : ""}`}
+                        aria-current={isToday ? "date" : undefined}
+                      >
+                        <p className={styles.dayNumber}>{dayNum}</p>
+                        <p className={styles.weekday}>{weekday}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div
+                  className={styles.allDayRow}
+                  style={{
+                    gridTemplateColumns: `${TIME_GUTTER} repeat(7, minmax(0, 1fr))`,
+                  }}
+                >
+                  <div className={styles.allDayLabel}>All day</div>
+                  {days.map((day) => {
+                    const key = zonedDateKey(day, timeZone);
+                    return (
+                      <div
+                        key={key}
+                        className={`${styles.allDayCell} ${key === todayKey ? styles.today : ""}`}
+                      >
+                        {eventList
+                          .filter(
+                            (event) =>
+                              event.all_day &&
+                              eventMinutesInDay(event, key, timeZone)
+                          )
+                          .map((event) => (
+                            <button
+                              key={event.id}
+                              type="button"
+                              data-all-day-event
+                              title={event.title}
+                              aria-label={`${event.title}, all day`}
+                              className={`${styles.event} ${styles.allDayEvent} ${selectedId === event.id ? styles.selectedEvent : ""}`}
+                              style={eventStyle(event.source_color)}
+                              onClick={() => setSelectedId(event.id)}
+                            >
+                              <span className={styles.eventTitle}>
+                                {event.title}
+                              </span>
+                            </button>
+                          ))}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            ))}
-          </div>
 
-          {days.map((day, dayIndex) => {
-            const dayKey = zonedDateKey(day, timeZone);
-            const laidOut = dayLayouts.get(dayKey) ?? [];
-            const nowKind =
-              nowMarker == null
-                ? null
-                : dayIndex < nowMarker.dayIndex
-                  ? "past"
-                  : dayIndex === nowMarker.dayIndex
-                    ? "today"
-                    : null;
-            return (
               <div
-                key={dayKey}
-                className="relative border-r border-border last:border-r-0"
-                style={{ height: (HOUR_END - HOUR_START) * HOUR_HEIGHT }}
+                className={styles.timeGrid}
+                style={{
+                  gridTemplateColumns: `${TIME_GUTTER} repeat(7, minmax(0, 1fr))`,
+                }}
               >
-                {hours.map((hour) => (
-                  <div
-                    key={hour}
-                    className="border-b border-dashed border-border/70"
-                    style={{ height: HOUR_HEIGHT }}
-                  />
-                ))}
-                {laidOut.map((item) => {
-                  const widthPct = 100 / item.cols;
-                  const leftPct = item.col * widthPct;
-                  const color = item.event.source_color || "#6366f1";
-                  const selectedEvent = selectedId === item.event.id;
+                <div className={styles.timeGutter}>
+                  {hours.map((hour) => (
+                    <div
+                      key={hour}
+                      className={styles.timeLabel}
+                      style={{ height: HOUR_HEIGHT }}
+                    >
+                      <span>{formatHourLabel(hour)}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {days.map((day, dayIndex) => {
+                  const dayKey = zonedDateKey(day, timeZone);
+                  const laidOut = dayLayouts.get(dayKey) ?? [];
+                  const nowKind =
+                    nowMarker == null
+                      ? null
+                      : dayIndex < nowMarker.dayIndex
+                        ? "past"
+                        : dayIndex === nowMarker.dayIndex
+                          ? "today"
+                          : null;
                   return (
-                    <button
-                      key={`${item.event.id}-${dayKey}`}
-                      type="button"
-                      title={item.event.title}
-                      onClick={() => setSelectedId(item.event.id)}
-                      className={`absolute z-[1] cursor-pointer overflow-hidden rounded-md border px-1.5 py-0.5 text-left text-[11px] leading-tight ${
-                        selectedEvent ? "ring-2 ring-ring" : ""
-                      }`}
+                    <div
+                      key={dayKey}
+                      data-day-column
+                      className={`${styles.dayColumn} ${dayKey === todayKey ? styles.today : ""}`}
                       style={{
-                        top: item.top,
-                        height: item.height,
-                        left: `calc(${leftPct}% + 2px)`,
-                        width: `calc(${widthPct}% - 4px)`,
-                        ...eventStyle(color, selectedEvent),
+                        height: (HOUR_END - HOUR_START) * HOUR_HEIGHT,
                       }}
                     >
-                      <span className="line-clamp-3 font-semibold">
-                        {item.event.title}
-                      </span>
-                    </button>
+                      {hours.map((hour) => (
+                        <div
+                          key={hour}
+                          data-hour-slot
+                          className={styles.hourSlot}
+                          style={{ height: HOUR_HEIGHT }}
+                        />
+                      ))}
+                      {laidOut.map((item) => {
+                        const widthPct = 100 / item.cols;
+                        const leftPct = item.col * widthPct;
+                        const color = item.event.source_color || "#0078d4";
+                        const selectedEvent = selectedId === item.event.id;
+                        const startMin = Math.round(
+                          (item.top / HOUR_HEIGHT) * 60
+                        );
+                        const endMin = Math.round(
+                          ((item.top + item.height) / HOUR_HEIGHT) * 60
+                        );
+                        return (
+                          <button
+                            key={`${item.event.id}-${dayKey}`}
+                            type="button"
+                            data-calendar-event
+                            title={`${item.event.title} — ${formatMinuteLabel(startMin)}–${formatMinuteLabel(endMin)}`}
+                            aria-label={`${item.event.title}, ${formatMinuteLabel(startMin)}–${formatMinuteLabel(endMin)}`}
+                            onClick={() => setSelectedId(item.event.id)}
+                            className={`${styles.event} ${styles.timedEvent} ${item.height <= HOUR_HEIGHT / 2 ? styles.shortEvent : ""} ${item.height <= HOUR_HEIGHT / 4 ? styles.tinyEvent : ""} ${selectedEvent ? styles.selectedEvent : ""}`}
+                            style={{
+                              top: item.top + 2,
+                              height: Math.max(2, item.height - 4),
+                              left: `calc(${leftPct}% + 2px)`,
+                              width: `calc(${widthPct}% - 4px)`,
+                              ...eventStyle(color),
+                            }}
+                          >
+                            <span className={styles.eventTitle}>
+                              {item.event.title}
+                            </span>
+                            {item.height >= HOUR_HEIGHT &&
+                            item.event.location ? (
+                              <span className={styles.eventLocation}>
+                                {item.event.location}
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+
+                      {nowKind && nowMarker ? (
+                        <div
+                          data-current-time-marker={nowKind}
+                          className="pointer-events-none absolute inset-x-0 z-[2]"
+                          style={{ top: nowMarker.top }}
+                          aria-hidden
+                        >
+                          <div className="relative h-0">
+                            {nowKind === "today" ? (
+                              <>
+                                <div className={styles.nowDot} />
+                                <div className={styles.nowLine} />
+                              </>
+                            ) : (
+                              <div
+                                className={styles.pastLine}
+                                style={{ height: 0 }}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   );
                 })}
-
-                {nowKind && nowMarker ? (
-                  <div
-                    className="pointer-events-none absolute inset-x-0 z-[2]"
-                    style={{ top: nowMarker.top }}
-                    aria-hidden
-                  >
-                    <div className="relative h-0">
-                      {nowKind === "today" ? (
-                        <>
-                          <div className="absolute left-0 top-1/2 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary" />
-                          <div className="absolute inset-x-0 top-1/2 h-0.5 -translate-y-1/2 bg-primary" />
-                        </>
-                      ) : (
-                        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-dashed border-primary" />
-                      )}
-                    </div>
-                  </div>
-                ) : null}
               </div>
-            );
-          })}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -295,7 +446,7 @@ export function InterviewerWeekView({
           if (!open) setSelectedId(null);
         }}
       >
-        <DialogContent className="max-w-xl">
+        <DialogContent className={`max-w-xl ${styles.calendar}`}>
           {selected ? (
             <>
               <DialogHeader>
@@ -322,7 +473,7 @@ export function InterviewerWeekView({
                     <span
                       className="inline-block size-3 rounded-sm"
                       style={{
-                        backgroundColor: selected.source_color || "#6366f1",
+                        backgroundColor: selected.source_color || "#0078d4",
                       }}
                     />
                     {selected.source_label}
@@ -371,6 +522,29 @@ export function InterviewerWeekView({
                     </dt>
                     <dd className="mt-0.5 max-h-48 overflow-auto whitespace-pre-wrap text-muted-foreground">
                       {selected.description}
+                    </dd>
+                  </div>
+                ) : null}
+                {selected.linked_applications.length > 0 ? (
+                  <div className="sm:col-span-2">
+                    <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                      Applications
+                    </dt>
+                    <dd className="mt-1 flex flex-col gap-1">
+                      {selected.linked_applications.map((app) => {
+                        const href = `${jobTrackUrl.replace(/\/$/, "")}${applicationBasePath}/${encodeURIComponent(app.job_id)}?candidateId=${encodeURIComponent(app.candidate_id)}`;
+                        return (
+                          <a
+                            key={app.application_id}
+                            className="text-sm text-primary underline underline-offset-2"
+                            href={href}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {applicationLabel(app.role, app.company)}
+                          </a>
+                        );
+                      })}
                     </dd>
                   </div>
                 ) : null}

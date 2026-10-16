@@ -35,7 +35,7 @@ export function SharedApplicationDetails({ context }: { context: SharedSessionCo
       ["Resume on file",j.resume_content_json ? "Yes" : "No"],["Cover letter on file",j.cover_letter_json ? "Yes" : "No"],
       ["Resume downloads",j.resume_downloads],["Last resume download",date(j.resume_at)],
       ["Cover letter downloads",j.cover_letter_downloads],["Last cover letter download",date(j.cover_letter_at)],
-    ]} /><a className="text-sm text-primary underline underline-offset-2" href={href} target="_blank" rel="noreferrer">Open application in Job Track for documents and actions</a></Section></div></div>
+    ]} /><a className="text-sm text-primary underline underline-offset-2" href={href} target="_blank" rel="noreferrer">Open application in Peer Ink for documents and actions</a></Section></div></div>
     <Section title="Interviews">{context.interviewEvents.map(e => <div key={e.id} className="text-sm"><p className="font-medium">{e.title}</p><p>{date(e.starts_at)} – {date(e.ends_at)}</p><p>{e.location}</p></div>)}</Section>
     <Section title="Job description"><p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{j.description || "No saved description."}</p></Section>
   </div>;

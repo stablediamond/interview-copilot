@@ -1,0 +1,85 @@
+.calendar {
+  --cal-surface: #fff;
+  --cal-border: #d1d1d1;
+  --cal-text: #242424;
+  --cal-muted: #616161;
+  --cal-hover: #f0f0f0;
+  --cal-accent: #0078d4;
+  --cal-today: #fafafa;
+  --cal-minor-line: #ebebeb;
+  --cal-event-base: #fff;
+  --cal-event-mix: 18%;
+  color: var(--cal-text);
+  font: 13px/1.35 "Segoe UI", Arial, sans-serif;
+}
+:global(.dark) .calendar {
+  --cal-surface: #1f1f1f;
+  --cal-border: #505050;
+  --cal-text: #e0e0e0;
+  --cal-muted: #b5b5b5;
+  --cal-hover: #333;
+  --cal-accent: #47a4f5;
+  --cal-today: #292929;
+  --cal-minor-line: #3a3a3a;
+  --cal-event-base: #202020;
+  --cal-event-mix: 42%;
+}
+.toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:8px 0 12px; }
+.toolbar button, .toolbar input { min-height:32px; border-radius:2px; font-family:inherit; font-size:13px; box-shadow:none; }
+.toolbar > div > button { height:32px; padding:0 12px; border:1px solid var(--cal-border); background:var(--cal-surface); color:var(--cal-text); }
+.toolbar > div > button:hover { background:var(--cal-hover); }
+.toolbar > div > button[aria-pressed="true"] { background:var(--cal-accent); color:white; }
+.toolbar input { padding:6px 8px; border-color:var(--cal-border); background:var(--cal-surface); color:var(--cal-text); }
+.workspace { display:flex; align-items:flex-start; gap:16px; }
+.main { flex:1; min-width:0; }
+.sidebar { display:flex; flex-direction:column; gap:12px; width:208px; flex-shrink:0; }
+.scroll { max-height:72vh; min-height:320px; overflow:auto; border:1px solid var(--cal-border); background:var(--cal-surface); scrollbar-color:var(--cal-border) var(--cal-surface); }
+.sheet { min-width:896px; }
+.stickyHeader { position:sticky; top:0; z-index:20; background:var(--cal-surface); }
+.dayHeaders, .timeGrid, .allDayRow { display:grid; }
+.dayHeaders { border-bottom:1px solid var(--cal-border); }
+.headerGutter, .dayHeader, .allDayLabel, .allDayCell { border-right:1px solid var(--cal-border); }
+.headerGutter { position:sticky; left:0; z-index:1; background:var(--cal-surface); }
+.dayHeader { height:54px; padding:10px 12px 5px; border-top:3px solid transparent; text-align:left; }
+.dayHeader:last-child, .allDayCell:last-child, .dayColumn:last-child { border-right:0; }
+.dayHeader.today { border-top-color:var(--cal-accent); }
+.dayNumber { margin:0; font-size:20px; font-weight:400; line-height:22px; color:var(--cal-accent); }
+.dayHeader.today .dayNumber { font-weight:600; }
+.weekday { margin:0; font-size:12px; line-height:15px; }
+.dayHeader.today .weekday { color:var(--cal-accent); }
+.today { background:var(--cal-today); }
+.allDayRow { border-bottom:1px solid var(--cal-border); max-height:110px; overflow-y:auto; }
+.allDayLabel { position:sticky; left:0; z-index:1; background:var(--cal-surface); padding:5px 6px; text-align:right; font-size:11px; color:var(--cal-muted); }
+.allDayCell { min-height:26px; padding:2px; display:flex; flex-direction:column; gap:2px; }
+.timeGrid { position:relative; }
+.timeGutter { position:sticky; left:0; z-index:3; border-right:1px solid var(--cal-border); background:var(--cal-surface); }
+.timeLabel { border-bottom:1px solid var(--cal-border); text-align:right; padding:3px 8px 0 0; font-size:12px; color:var(--cal-muted); }
+.dayColumn { position:relative; border-right:1px solid var(--cal-border); }
+.hourSlot { position:relative; border-bottom:1px solid var(--cal-border); pointer-events:none; }
+.hourSlot::after { content:""; position:absolute; left:0; right:0; top:50%; border-top:1px dashed var(--cal-minor-line); }
+.event { display:flex; flex-direction:column; justify-content:flex-start; align-items:stretch; cursor:pointer; overflow:hidden; border:1px solid color-mix(in srgb, var(--event-color) 35%, var(--cal-surface)); border-left:5px solid var(--event-color); border-radius:3px; padding:4px 6px; color:var(--cal-text); background:color-mix(in srgb, var(--event-color) var(--cal-event-mix), var(--cal-event-base)); text-align:left; font:12px/16px "Segoe UI", Arial, sans-serif; }
+.event:hover { filter:brightness(1.12); }
+.event:focus-visible, .calendar button:focus-visible { outline:2px solid var(--cal-accent); outline-offset:1px; }
+.timedEvent { position:absolute; z-index:1; }
+.eventTitle { display:block; font-weight:600; overflow:hidden; overflow-wrap:normal; flex-shrink:0; }
+.eventLocation { display:block; font-weight:400; flex-shrink:0; }
+.allDayEvent { height:22px; min-height:22px; padding:1px 6px; }
+.allDayEvent .eventTitle { white-space:nowrap; text-overflow:ellipsis; }
+.selectedEvent { outline:2px solid var(--cal-accent); outline-offset:0; z-index:2; }
+.nowDot { position:absolute; left:0; top:50%; width:12px; height:12px; border-radius:50%; transform:translate(-50%,-50%); background:var(--cal-accent); }
+.nowLine { position:absolute; left:0; right:0; height:2px; top:50%; transform:translateY(-50%); background:var(--cal-accent); }
+.pastLine { position:absolute; left:0; right:0; top:50%; border-top:1px dashed var(--cal-accent); }
+@media(max-width:900px) {
+  .workspace { flex-direction:column; }
+  .main, .sidebar { width:100%; }
+  .sidebar { flex-direction:row; flex-wrap:wrap; }
+  .sidebar > * { flex:1 1 200px; }
+  .toolbar > div { max-width:100%; }
+  .toolbar input { min-width:0; }
+}
+.shortEvent .eventTitle { white-space:nowrap; text-overflow:ellipsis; }
+.calendar.dialogPanel { border-radius:4px; border-color:var(--cal-border); background:var(--cal-surface); padding:20px; }
+.dialogPanel button, .dialogPanel a, .dialogPanel input, .dialogPanel select { border-radius:2px; font-size:13px; box-shadow:none; }
+.dialogPanel button:not([aria-label]), .dialogPanel input, .dialogPanel select { min-height:32px; }
+
+.tinyEvent { padding-top:0; padding-bottom:0; line-height:14px; }

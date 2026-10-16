@@ -22,12 +22,12 @@ type JobTrackLoginBody = {
 };
 
 /**
- * Proxy Job Track's JSON login so the desktop overlay never talks to Job Track
+ * Proxy Peer Ink's JSON login so the desktop overlay never talks to Peer Ink
  * from the renderer (no CORS, same error messages as the web app).
  */
 export async function POST(request: Request) {
   if (!isJobTrackConfigured()) {
-    return jsonError("Job Track sign-in is not configured.", 503);
+    return jsonError("Peer Ink sign-in is not configured.", 503);
   }
 
   const { data, error } = await parseBody(request, loginSchema);
@@ -56,7 +56,7 @@ export async function POST(request: Request) {
 
     if (res.status === 404) {
       return jsonError(
-        "Job Track login is not available on the server yet. Deploy the latest Job Track app.",
+        "Peer Ink login is not available on the server yet. Deploy the latest Peer Ink app.",
         502,
       );
     }
@@ -79,7 +79,7 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     if (err instanceof TypeError) {
-      return jsonError("Could not reach Job Track. Check your connection and try again.", 502);
+      return jsonError("Could not reach Peer Ink. Check your connection and try again.", 502);
     }
     return handleRouteError(err);
   }

@@ -27,7 +27,7 @@ const { spawn } = require("child_process");
 // and before any other getPath("userData") call. Packaged Windows otherwise
 // flips between "%APPDATA%\Interview Coach" (productName) and
 // "%APPDATA%\InterviewCoach" (setName) / "interview-coach" (package name),
-// which looks like Job Track + ChatGPT logins resetting every launch.
+// which looks like Peer Ink + ChatGPT logins resetting every launch.
 app.setName("InterviewCoach");
 {
   const dest = path.join(app.getPath("appData"), "InterviewCoach");
@@ -379,7 +379,7 @@ function savedWindowBounds() {
 function createWindow() {
   const saved = savedWindowBounds();
   mainWindow = new BrowserWindow({
-    title: "Interview Copilot",
+    title: "Peer Ink",
     ...(saved ?? DEFAULT_WINDOW_BOUNDS),
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
@@ -552,10 +552,10 @@ function showTray() {
   if (tray) return;
   const icon = nativeImage.createFromBuffer(makeTrayPng());
   tray = new Tray(icon);
-  tray.setToolTip("Interview Copilot");
+  tray.setToolTip("Peer Ink");
   tray.setContextMenu(
     Menu.buildFromTemplate([
-      { label: "Show Interview Copilot", click: restoreFromTray },
+      { label: "Show Peer Ink", click: restoreFromTray },
       { type: "separator" },
       { label: "Quit", click: () => app.quit() },
     ])

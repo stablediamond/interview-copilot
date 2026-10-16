@@ -99,7 +99,7 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-base">Default interview prompts</CardTitle>
           <CardDescription>
-            Used when you Build brief on Session. This is not the Job Track
+            Used when you Build brief on Session. This is not the Peer Ink
             resume-generation prompt saved on the candidate.
           </CardDescription>
         </CardHeader>

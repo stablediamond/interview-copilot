@@ -26,7 +26,7 @@ import {
 type Status = "loading" | "in" | "out";
 
 /**
- * Login gate backed by Job Track. When Job Track isn't configured this is a
+ * Login gate backed by Peer Ink. When Peer Ink isn't configured this is a
  * pass-through. Otherwise the whole app is hidden behind a sign-in screen, and
  * the protected API routes independently verify the token.
  */
@@ -115,7 +115,7 @@ function LoginScreen({ onSignedIn }: { onSignedIn: (email: string) => void }) {
       onSignedIn(email.trim().toLowerCase());
     } catch (err) {
       toast.error("Sign in failed", {
-        description: err instanceof Error ? err.message : "Check your Job Track credentials.",
+        description: err instanceof Error ? err.message : "Check your Peer Ink credentials.",
       });
     } finally {
       setBusy(false);
@@ -125,10 +125,15 @@ function LoginScreen({ onSignedIn }: { onSignedIn: (email: string) => void }) {
   return (
     <div className="flex min-h-screen items-center justify-center px-4">
       <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle>Sign in</CardTitle>
+        <CardHeader className="items-center text-center">
+          <img
+            src="/peerink-mark.png"
+            alt=""
+            className="mb-2 h-12 w-12 object-contain"
+          />
+          <CardTitle>Peer Ink</CardTitle>
           <CardDescription>
-            Use your Job Track email and password.
+            Use your Peer Ink email and password.
           </CardDescription>
         </CardHeader>
         <CardContent>

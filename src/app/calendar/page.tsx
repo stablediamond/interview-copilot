@@ -8,15 +8,16 @@ import { Spinner } from "@/components/ui/spinner";
 import { apiFetch } from "@/lib/client";
 import { isJobTrackConfigured } from "@/lib/job-track";
 import type { InterviewerCalendarPayload } from "@/lib/calendar-types";
+import type { CalendarEventRange } from "@/lib/calendar-event-range";
 
 const COPY = {
   interviewer: {
     description:
-      "Interview events assigned to you in Job Track. Open an event to start a live session with that candidate and application.",
+      "Interview events assigned to you in Peer Ink. Open an event to start a live session with that candidate and application.",
   },
   manager: {
     description:
-      "Imported interview events for your team in Job Track. Open an event to start a live session with that candidate and application.",
+      "Imported interview events for your team in Peer Ink. Open an event to start a live session with that candidate and application.",
   },
 } as const;
 
@@ -31,8 +32,7 @@ export default function CalendarPage() {
     if (!isJobTrackConfigured()) {
       setState({
         kind: "error",
-        message:
-          "Job Track sign-in is off, so the calendar cannot load.",
+        message: "Peer Ink sign-in is off, so the calendar cannot load.",
       });
       return;
     }
@@ -47,9 +47,7 @@ export default function CalendarPage() {
           setState({
             kind: "error",
             message:
-              err instanceof Error
-                ? err.message
-                : "Could not load calendar.",
+              err instanceof Error ? err.message : "Could not load calendar.",
           });
         }
       }
@@ -60,6 +58,22 @@ export default function CalendarPage() {
     };
   }, []);
 
+  const onRangeNeeded = React.useCallback(
+    async (range: CalendarEventRange) => {
+      const data = await apiFetch<InterviewerCalendarPayload>(
+        `/api/calendar?from=${encodeURIComponent(range.start)}&to=${encodeURIComponent(range.end)}`
+      );
+      return {
+        events: data.events,
+        range: {
+          start: data.rangeStart || range.start,
+          end: data.rangeEnd || range.end,
+        },
+      };
+    },
+    []
+  );
+
   return (
     <div className="space-y-6">
       <div>
@@ -67,7 +81,7 @@ export default function CalendarPage() {
         <p className="text-sm text-muted-foreground">
           {state.kind === "ready"
             ? COPY[state.data.mode].description
-            : "Interview events from Job Track. Managers see their team calendar; interviewers see events assigned to them."}
+            : "Interview events from Peer Ink. Managers see their team calendar; interviewers see events assigned to them."}
         </p>
       </div>
 
@@ -90,7 +104,16 @@ export default function CalendarPage() {
           </CardContent>
         </Card>
       ) : (
-        <InterviewerWeekView events={state.data.events} />
+        <InterviewerWeekView
+          events={state.data.events}
+          initialEventRange={{
+            start: state.data.rangeStart,
+            end: state.data.rangeEnd,
+          }}
+          jobTrackUrl={state.data.jobTrackUrl}
+          applicationBasePath={state.data.applicationBasePath}
+          onRangeNeeded={onRangeNeeded}
+        />
       )}
     </div>
   );

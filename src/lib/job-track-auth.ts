@@ -100,7 +100,7 @@ export function hasSession(): boolean {
   return Boolean(readLocalSession());
 }
 
-/** Sign in with a Job Track email + password. */
+/** Sign in with a Peer Ink email + password. */
 export async function signIn(email: string, password: string): Promise<void> {
   const res = await fetch("/api/auth/login", {
     method: "POST",
@@ -119,7 +119,7 @@ export async function signIn(email: string, password: string): Promise<void> {
     const message =
       payload && payload.ok === false
         ? payload.error
-        : "Sign in failed. Check your Job Track email and password.";
+        : "Sign in failed. Check your Peer Ink email and password.";
     throw new Error(message);
   }
 
@@ -150,7 +150,7 @@ export async function signOut(): Promise<void> {
 }
 
 /**
- * Return the stored Job Track bearer token, or null if missing/expired.
+ * Return the stored Peer Ink bearer token, or null if missing/expired.
  */
 export async function getValidAccessToken(): Promise<string | null> {
   if (!isJobTrackConfigured()) return null;

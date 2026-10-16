@@ -118,7 +118,7 @@ export interface AppSettings {
   /** Language the generated answer is written in. "zh" adds per-character pinyin. */
   answerLanguage: AnswerLanguage;
   /**
-   * Default ChatGPT interview brief. Edited on Settings. Not the Job Track
+   * Default ChatGPT interview brief. Edited on Settings. Not the Peer Ink
    * candidate resume-generation prompt.
    */
   defaultInterviewPrompts: string;

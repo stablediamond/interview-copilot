@@ -23,8 +23,8 @@ function extractToken(request: Request): string | null {
 }
 
 /**
- * Proxy Job Track's role-scoped calendar so the desktop overlay never talks
- * to Job Track from the renderer. Managers get their team calendar;
+ * Proxy Peer Ink's role-scoped calendar so the desktop overlay never talks
+ * to Peer Ink from the renderer. Managers get their team calendar;
  * interviewers get events assigned to them.
  */
 export async function GET(request: Request) {
@@ -36,7 +36,7 @@ export async function GET(request: Request) {
 
   if (!isJobTrackConfigured()) {
     return jsonError(
-      "Job Track is not configured, so the calendar is unavailable.",
+      "Peer Ink is not configured, so the calendar is unavailable.",
       503
     );
   }
@@ -71,7 +71,7 @@ export async function GET(request: Request) {
 
     if (res.status === 404) {
       return jsonError(
-        "Job Track calendar is not available on the server yet. Deploy the latest Job Track app.",
+        "Peer Ink calendar is not available on the server yet. Deploy the latest Peer Ink app.",
         502
       );
     }
@@ -108,7 +108,7 @@ export async function GET(request: Request) {
     if (err instanceof AccessError) return handleRouteError(err);
     if (err instanceof TypeError) {
       return jsonError(
-        "Could not reach Job Track. Check your connection and try again.",
+        "Could not reach Peer Ink. Check your connection and try again.",
         502
       );
     }

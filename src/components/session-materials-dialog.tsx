@@ -168,7 +168,7 @@ export function SessionMaterialsDialog({
           <DialogDescription>
             Resume is the linked application&apos;s resume JSON as readable
             text — not the raw JSON. Interview prompts default from Settings,
-            not the Job Track resume-writer prompt. You can still tweak them
+            not the Peer Ink resume-writer prompt. You can still tweak them
             for this session.
           </DialogDescription>
         </DialogHeader>

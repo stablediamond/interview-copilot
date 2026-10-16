@@ -56,8 +56,8 @@ You can configure the OpenAI key and models **either** in the Settings UI **or**
 | `OPENAI_FAST_MODEL` | No | `gpt-4.1-mini` | Fast model for question detection |
 | `DEEPGRAM_API_KEY` | No | — | Optional low-latency mic streaming. If missing, OpenAI transcribes audio instead |
 | `DATABASE_URL` | No | `file:./dev.db` | SQLite database location |
-| `JOB_TRACK_URL` | No | Job Track production URL | Origin used to verify email/password logins. Empty string disables the gate |
-| `NEXT_PUBLIC_JOB_TRACK_URL` | No | same | Public Job Track URL for the sign-up link |
+| `JOB_TRACK_URL` | No | Peer Ink production URL | Origin used to verify email/password logins. Empty string disables the gate |
+| `NEXT_PUBLIC_JOB_TRACK_URL` | No | same | Public Peer Ink URL for the sign-up link |
 
 The app never sends your API keys to the browser. The OpenAI key is stored server-side and only ever shown masked. For Deepgram, the server mints a short-lived JWT via `/v1/auth/grant`, and only that temporary token reaches the client.
 
@@ -175,7 +175,7 @@ private repos.)
   (`%APPDATA%/interview-coach`) on first launch, so data persists and is
   writable.
 - Each install is fully independent: its own database, settings, and API key
-  (entered in-app on first run). Sign-in uses your **Job Track** email and
+  (entered in-app on first run). Sign-in uses your **Peer Ink** email and
   password; resume data stays on this machine.
 
 ## Keyboard shortcuts (Session page)
@@ -204,15 +204,15 @@ private repos.)
 - A **confidence** label reflects evidence strength, and a **risk note** warns when an answer leans on weak support.
 - The **Safer** mode rewrites an answer to remove unsupported claims.
 
-## Access gate (Job Track login)
+## Access gate (Peer Ink login)
 
-The app uses the same email/password accounts as **Job Track**. Pending and
-suspended users are rejected with the same messages as the Job Track website.
+The app uses the same email/password accounts as **Peer Ink**. Pending and
+suspended users are rejected with the same messages as the Peer Ink website.
 There is no separate Interview Coach password.
 
-1. Create or approve the user in Job Track (sign up, or **Admin → Users**).
+1. Create or approve the user in Peer Ink (sign up, or **Admin → Users**).
 2. In Interview Coach, sign in with that email and password.
-3. Revoke access from Job Track (suspend the user, change their password, or
+3. Revoke access from Peer Ink (suspend the user, change their password, or
    delete their session). The overlay drops them on the next verification.
 
 By default the app talks to `https://platform.peerink.com`. Override with
@@ -220,7 +220,7 @@ By default the app talks to `https://platform.peerink.com`. Override with
 `JOB_TRACK_URL` to an empty string to turn the gate **off** for local-only use.
 
 On launch the app shows a sign-in screen. OpenAI/Deepgram-backed API routes
-verify the Job Track token server-side (return 401 when missing/revoked), with
+verify the Peer Ink token server-side (return 401 when missing/revoked), with
 a short cache so a brief network blip won't kick out a signed-in user
 mid-session.
 
@@ -244,20 +244,20 @@ src/lib/                db, llm wrapper, prompts, schemas, context selection, he
 
 ### Shared calendar sessions
 
-Opening Session from a calendar event now shows the Job Track room: participant presence, event details, real/support meeting links, Chats, Copilot answers, and linked Candidate/Application tabs. It uses the same event ID and data as Job Track, syncing every 500 ms after each completed request. Only managers may edit the real meeting link. Candidate details omit credentials and work experience. Application details are displayed locally; document downloads and management actions open the full Job Track application page.
+Opening Session from a calendar event now shows the Peer Ink room: participant presence, event details, real/support meeting links, Chats, Copilot answers, and linked Candidate/Application tabs. It uses the same event ID and data as Peer Ink, syncing every 500 ms after each completed request. Only managers may edit the real meeting link. Candidate details omit credentials and work experience. Application details are displayed locally; document downloads and management actions open the full Peer Ink application page.
 
 Positioning Brief appears above the GPT and Record & Answer workspace in the GPT tab. Sessions without a calendar event retain the standalone brief/GPT flow. If shared-session loading fails, Retry is available and the brief/GPT workspace remains usable.
 
-Deploy the accompanying Job Track bearer-token support for `/api/event-sessions/{eventId}` and ensure migration `0020_event_sessions.sql` is applied. The desktop app forwards its signed-in user's token through a local proxy; tokens are never put in URLs. Run `node scripts/test-shared-session.cjs` to check the proxy contract.
+Deploy the accompanying Peer Ink bearer-token support for `/api/event-sessions/{eventId}` and ensure migration `0020_event_sessions.sql` is applied. The desktop app forwards its signed-in user's token through a local proxy; tokens are never put in URLs. Run `node scripts/test-shared-session.cjs` to check the proxy contract.
 
-Shared sessions use live Server-Sent Events: Job Track serves `/api/event-sessions/{eventId}/stream` (deploy the latest Job Track), the desktop app passes it through `/api/calendar/shared-session/stream`, and viewers receive each GPT answer delta as it is saved. GPT answers are posted immediately (no polling delay, newest revision wins while a post is in flight). If the stream is unavailable the session falls back to polling and shows "Connected · polling for updates". Run `node scripts/test-session-stream.cjs` and `node scripts/test-answer-replay.cjs` to check the client side.
+Shared sessions use live Server-Sent Events: Peer Ink serves `/api/event-sessions/{eventId}/stream` (deploy the latest Peer Ink), the desktop app passes it through `/api/calendar/shared-session/stream`, and viewers receive each GPT answer delta as it is saved. GPT answers are posted immediately (no polling delay, newest revision wins while a post is in flight). If the stream is unavailable the session falls back to polling and shows "Connected · polling for updates". Run `node scripts/test-session-stream.cjs` and `node scripts/test-answer-replay.cjs` to check the client side.
 
 
 ### Live GPT answer sharing
 
 On an event Session's GPT tab, **Answer** submits the current question/caption and shares the new assistant reply incrementally in the room's Copilot feed. Earlier chat replies and Positioning Brief submissions are excluded. Updates amend one ordered answer card, and a revision/change cursor prevents stale retries from overwriting newer text. Sharing retries while the Session remains open. Keep the Session open until sharing finishes; closing the app can interrupt it. The capture uses the embedded ChatGPT page's visible assistant text, so changes to ChatGPT's page structure may require updates; capture failures are shown in the sharing status. Do not switch GPT conversations during generation.
 
-Deploy Job Track migration `0021_session_streaming_answers.sql` and its updated API before using this feature. Restart/rebuild the Electron app to load its new preload/main-process handlers. Session content now fills the window, with responsive GPT/recording panes on narrow windows.
+Deploy Peer Ink migration `0021_session_streaming_answers.sql` and its updated API before using this feature. Restart/rebuild the Electron app to load its new preload/main-process handlers. Session content now fills the window, with responsive GPT/recording panes on narrow windows.
 
 Capture tracks stable conversation-turn aliases when ChatGPT assigns or replaces message IDs. A completed answer is confirmed after 2.5 seconds of unchanged text and idle controls; active Stop controls keep capture running. The latest 20 answer updates remain in desktop memory for replay after a Session refresh or return to the page (cleared on account change or app exit). Diagnostic entries in `main.log` include capture state, message/character counts, and completion signals, without prompt or answer text.
 

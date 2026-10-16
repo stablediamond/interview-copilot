@@ -4,12 +4,12 @@ import { getJobTrackUrl, isJobTrackConfigured } from "@/lib/job-track";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Pass-through of Job Track's Server-Sent Events stream (the bearer token never appears in a URL). */
+/** Pass-through of Peer Ink's Server-Sent Events stream (the bearer token never appears in a URL). */
 export async function GET(request: Request) {
   try {
     await assertAccess(request);
     const authorization = request.headers.get("authorization");
-    if (!isJobTrackConfigured() || !authorization?.match(/^Bearer\s+\S+$/i)) return jsonError("Sign in to Job Track to join a shared session.", 401);
+    if (!isJobTrackConfigured() || !authorization?.match(/^Bearer\s+\S+$/i)) return jsonError("Sign in to Peer Ink to join a shared session.", 401);
     const query = new URL(request.url).searchParams;
     const eventId = query.get("eventId")?.trim();
     if (!eventId || eventId.length > 200) return jsonError("A calendar event is required.", 400);
@@ -32,7 +32,7 @@ export async function GET(request: Request) {
     if (!upstream.ok || !upstream.body) {
       request.signal.removeEventListener("abort", abortUpstream);
       const data = await upstream.json().catch(() => null);
-      return jsonError(data?.message || data?.error || "Live updates are unavailable. Deploy the latest Job Track server.", upstream.ok ? 502 : upstream.status);
+      return jsonError(data?.message || data?.error || "Live updates are unavailable. Deploy the latest Peer Ink server.", upstream.ok ? 502 : upstream.status);
     }
     return new Response(upstream.body, {
       headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no" },

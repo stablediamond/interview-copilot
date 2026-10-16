@@ -47,7 +47,7 @@ export function composeJobPromptPageSource(
   return header && body ? `${header}\n\n${body}` : header || body;
 }
 
-/** Combine base interview prompts + resume + JD the same way Job Track does. */
+/** Combine base interview prompts + resume + JD the same way Peer Ink does. */
 export function buildInterviewBriefPrompt(
   basePrompts: string,
   resumeText: string,

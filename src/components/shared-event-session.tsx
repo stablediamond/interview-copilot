@@ -163,7 +163,7 @@ export function SharedEventSession({ event, userId, calendarPath, canEditMeeting
     window.addEventListener("pagehide", leave);
     return () => { stopped = true; clearTimeout(timer); window.removeEventListener("pagehide", leave); void queue.current.finally(leave).catch(() => {}); };
   }, [endpoint, request]);
-  // Live updates: Server-Sent Events from Job Track (through the local proxy).
+  // Live updates: Server-Sent Events from Peer Ink (through the local proxy).
   // Reconnects with the newest cursors and backs off while unavailable; the
   // polling effect above covers any gap.
   useEffect(() => {

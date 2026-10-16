@@ -3,8 +3,9 @@ import type { CalendarEventView } from "./calendar-types";
 
 export const HOUR_START = 0;
 export const HOUR_END = 24;
-export const HOUR_HEIGHT = 66;
-export const TIME_GUTTER = "4.5rem";
+/** Match Peer Ink platform calendar week view. */
+export const HOUR_HEIGHT = 80;
+export const TIME_GUTTER = "56px";
 export const FALLBACK_TZ = "UTC";
 
 export type LaidOutEvent = {
@@ -93,7 +94,7 @@ export function dayHeaderParts(
   }).format(date);
   const weekday = new Intl.DateTimeFormat(undefined, {
     timeZone,
-    weekday: "long",
+    weekday: "short",
   }).format(date);
   return { dayNum, weekday };
 }
@@ -144,7 +145,7 @@ export function applicationLabel(role: string, company: string): string {
   return [role, company].filter(Boolean).join(" at ") || "Application";
 }
 
-function eventMinutesInDay(
+export function eventMinutesInDay(
   event: CalendarEventView,
   dayKey: string,
   timeZone: string
@@ -189,6 +190,7 @@ export function layoutDayEvents(
   timeZone: string
 ): LaidOutEvent[] {
   const positioned = events
+    .filter((event) => !event.all_day)
     .map((event) => {
       const mins = eventMinutesInDay(event, dayKey, timeZone);
       if (!mins) return null;
@@ -258,25 +260,9 @@ export function layoutDayEvents(
   return result;
 }
 
-export function eventStyle(
-  color: string,
-  selected: boolean
-): CSSProperties {
-  const bg = hexToRgba(color, selected ? 0.42 : 0.28);
+/** CSS custom property used by Peer Ink calendar-week-view.module.css */
+export function eventStyle(color: string): CSSProperties {
   return {
-    backgroundColor: bg,
-    borderColor: color,
-    borderLeftWidth: 3,
-    borderLeftColor: color,
-    color: "inherit",
-  };
-}
-
-function hexToRgba(hex: string, alpha: number): string {
-  const raw = hex.replace("#", "");
-  if (raw.length !== 6) return `rgba(99, 102, 241, ${alpha})`;
-  const r = Number.parseInt(raw.slice(0, 2), 16);
-  const g = Number.parseInt(raw.slice(2, 4), 16);
-  const b = Number.parseInt(raw.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    "--event-color": /^#[0-9a-f]{6}$/i.test(color) ? color : "#0078d4",
+  } as CSSProperties;
 }

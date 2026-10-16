@@ -2,7 +2,7 @@ const PLACEHOLDER_PROFILE = "{{PROFILE}}";
 const PLACEHOLDER_HTML_PAGE_SOURCE = "{{HTML_PAGE_SOURCE}}";
 
 /**
- * Default ChatGPT brief for a live interview — not the Job Track resume
+ * Default ChatGPT brief for a live interview — not the Peer Ink resume
  * writer prompt stored on the candidate.
  */
 export const DEFAULT_INTERVIEW_PROMPTS = `You are a live interview copilot.
@@ -30,7 +30,7 @@ export function looksLikeResumeWriterPrompt(value: string): boolean {
   );
 }
 
-/** Prefer saved interview prompts; ignore empty or Job Track resume-writer text. */
+/** Prefer saved interview prompts; ignore empty or Peer Ink resume-writer text. */
 export function resolveInterviewPrompts(
   saved: string | undefined,
   fallback: string,

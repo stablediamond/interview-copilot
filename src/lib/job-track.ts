@@ -1,7 +1,7 @@
 /**
- * Job Track origin used to verify Interview Coach logins.
+ * Peer Ink origin used to verify Interview Coach logins.
  *
- * Unset JOB_TRACK_URL → production Job Track.
+ * Unset JOB_TRACK_URL → production Peer Ink.
  * Set JOB_TRACK_URL="" to disable the login gate (local-only, no accounts).
  */
 export const DEFAULT_JOB_TRACK_URL = "https://platform.peerink.com";
